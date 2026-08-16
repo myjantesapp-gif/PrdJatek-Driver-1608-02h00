@@ -585,10 +585,15 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     advanceQueueRef.current = advanceQueue;
   }, [advanceQueue]);
 
+  // Stable ref so the SSE useEffect closure always calls the latest version
+  // of pollOrders without needing to be in the effect's dependency array.
+  const pollOrdersRef = useRef<() => Promise<void>>(() => Promise.resolve());
+
   const pollOrders = useCallback(async () => {
     if (!driverId) return;
     try {
-      const isOnline = statusRef.current === 'online';
+      const currentStatus = statusRef.current;
+      const isOnline = currentStatus === 'online';
       // Assigned orders are still reconciled while offline so an existing
       // delivery cannot become stale. Unassigned offers, however, must only
       // be fetched and queued for an online driver.
@@ -641,9 +646,23 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         setStatusState('busy');
         setIncomingOrder(null);
       } else {
+        // ── BUG FIX: status stuck at 'busy' after delivery completes ──────────
+        // When the server no longer has an active order for this driver but the
+        // local status is still 'busy', the driver was in the middle of a
+        // delivery that has now finished (or was cancelled server-side). Reset
+        // to 'online' so the next poll cycle fetches available orders again.
+        if (statusRef.current === 'busy') {
+          setStatusState('online');
+          statusRef.current = 'online';
+          setActiveOrder(null);
+          // Return now — the next 3-second poll will fetch available orders
+          // with the corrected 'online' status.
+          return;
+        }
+
         if (!isOnline) {
-          // Do not retain offers while offline. Remove their IDs so they can
-          // be offered again after the driver comes back online.
+          // Deliberately offline — do not retain offers. Remove their IDs so
+          // they can be offered again after the driver comes back online.
            setIncomingOrder((currentIncoming) => {
              if (currentIncoming) seenOrderIds.current.delete(currentIncoming.apiId);
              return null;
@@ -742,24 +761,38 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     return Number.isFinite(id) && id > 0 ? id : null;
   };
 
+  // Keep the ref in sync so the SSE closure always calls the latest pollOrders
+  // without causing the SSE effect to tear down and rebuild.
+  useEffect(() => {
+    pollOrdersRef.current = pollOrders;
+  }, [pollOrders]);
+
   useEffect(() => {
     if (!driverId) return;
 
-    const token = api.getToken();
-    if (!token) return;
+    // Pass a getter so every reconnect attempt uses the freshest token
+    const sse = new JatekSse(
+      () => api.getToken(),
+      ['available_orders', `driver_orders:${driverId}`],
+    );
 
-    const sse = new JatekSse(token, [
-      'available_orders',
-      `driver_orders:${driverId}`,
-    ]);
     const unsubStatus = sse.onStatusChange(setIsSocketConnected);
+
+    // On 401/403 the token is invalid — log out and stop reconnecting
+    const unsubAuth = sse.onAuthError(() => {
+      console.warn('[DriverContext] SSE auth error — token rejected by server');
+      // The API layer will also start failing; the user will see "API non connectée"
+      // and can re-login from the profile screen.
+      setIsSocketConnected(false);
+    });
+
     const unsubEvent = sse.onEvent((event) => {
       const orderId = getSseOrderId(event);
 
       if (event.type === 'order_ready') {
         // order_ready is intentionally small; reconcile through the available
         // endpoint so the alert receives the correct flat order shape.
-        pollOrders();
+        pollOrdersRef.current();
         return;
       }
 
@@ -774,7 +807,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         lastAvailableOrdersRef.current = lastAvailableOrdersRef.current.filter(
           (order) => order.id !== orderId,
         );
-         suppressedOfferIds.current.add(orderId);
+        suppressedOfferIds.current.add(orderId);
         pendingQueueRef.current = pendingQueueRef.current.filter((id) => id !== orderId);
         enrichedOrderCache.current.delete(orderId);
         seenOrderIds.current.delete(orderId);
@@ -786,24 +819,27 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Reconcile authoritative status and assigned-order details.
-      pollOrders();
+      pollOrdersRef.current();
     });
+
     const stopSse = sse.start();
 
     // Initial sync
-    pollOrders();
+    pollOrdersRef.current();
 
     // Polling remains a safety net for missed SSE frames and app backgrounding.
-    fallbackPollRef.current = setInterval(pollOrders, FALLBACK_POLL_MS);
+    fallbackPollRef.current = setInterval(() => pollOrdersRef.current(), FALLBACK_POLL_MS);
 
     return () => {
       clearInterval(fallbackPollRef.current!);
       unsubStatus();
+      unsubAuth();
       unsubEvent();
       stopSse();
       setIsSocketConnected(false);
     };
-  }, [driverId, pollOrders]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driverId]); // intentionally only driverId — pollOrders is accessed via pollOrdersRef
 
   // ── Order actions ────────────────────────────────────────────────────────────
 

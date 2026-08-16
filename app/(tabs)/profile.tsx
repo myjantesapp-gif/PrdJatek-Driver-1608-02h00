@@ -22,19 +22,26 @@ function ProfileRow({ icon, label, value, color, onPress }: {
   color?: string;
   onPress?: () => void;
 }) {
-  const Wrap = onPress ? TouchableOpacity : View;
-  return (
-    <Wrap style={styles.row} onPress={onPress} activeOpacity={0.7}>
+  const inner = (
+    <>
       <View style={[styles.rowIcon, { backgroundColor: (color ?? Colors.primary) + '18' }]}>
         <Ionicons name={icon} size={20} color={color ?? Colors.primary} />
       </View>
       <View style={styles.rowInfo}>
         <Text style={styles.rowLabel}>{label}</Text>
-        {value && <Text style={styles.rowValue}>{value}</Text>}
+        {!!value && <Text style={styles.rowValue}>{value}</Text>}
       </View>
-      {onPress && <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />}
-    </Wrap>
+      {!!onPress && <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />}
+    </>
   );
+  if (onPress) {
+    return (
+      <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.7}>
+        {inner}
+      </TouchableOpacity>
+    );
+  }
+  return <View style={styles.row}>{inner}</View>;
 }
 
 const LEVEL_COLORS: Record<string, string> = {
@@ -155,6 +162,13 @@ export default function ProfileScreen() {
 
         <Text style={styles.sectionLabel}>Paramètres</Text>
         <View style={styles.section}>
+          <ProfileRow
+            icon="key-outline"
+            label="Changer le mot de passe"
+            color={Colors.secondary}
+            onPress={() => router.push('/change-password')}
+          />
+          <View style={styles.separator} />
           <ProfileRow
             icon="headset-outline"
             label="Support"

@@ -7,6 +7,7 @@ export type SseEvent = {
 
 type SseEventHandler = (event: SseEvent) => void;
 type SseStatusHandler = (connected: boolean) => void;
+type SseAuthErrorHandler = () => void;
 
 /**
  * Small authenticated SSE client for Expo web and native.
@@ -14,6 +15,13 @@ type SseStatusHandler = (connected: boolean) => void;
  * EventSource cannot be used here because it does not allow an Authorization
  * header. XMLHttpRequest supports that header on both Expo web and native,
  * and exposes the growing response body through onprogress.
+ *
+ * Reconnect uses exponential backoff (2 → 4 → 8 → 16 → 30 s max).
+ * On 401/403 the client stops reconnecting and fires authError handlers
+ * instead — the caller is expected to re-authenticate and recreate the client.
+ *
+ * The token is read fresh on every connection attempt via a getter function
+ * so that a refreshed JWT is used automatically.
  */
 export class JatekSse {
   private xhr: XMLHttpRequest | null = null;
@@ -24,11 +32,13 @@ export class JatekSse {
   private lastActivityAt = 0;
   private stopped = true;
   private connected = false;
+  private retryCount = 0;
   private readonly eventHandlers = new Set<SseEventHandler>();
   private readonly statusHandlers = new Set<SseStatusHandler>();
+  private readonly authErrorHandlers = new Set<SseAuthErrorHandler>();
 
   constructor(
-    private readonly token: string,
+    private readonly getToken: () => string | null,
     private readonly channels: string[],
   ) {}
 
@@ -42,8 +52,17 @@ export class JatekSse {
     return () => this.statusHandlers.delete(handler);
   }
 
+  /** Called when the server returns 401 or 403 — token is invalid/expired. */
+  onAuthError(handler: SseAuthErrorHandler) {
+    this.authErrorHandlers.add(handler);
+    return () => this.authErrorHandlers.delete(handler);
+  }
+
   start() {
+    // Guard against double-start creating duplicate XHR/timers
+    if (!this.stopped) this.stop();
     this.stopped = false;
+    this.retryCount = 0;
     this.lastActivityAt = Date.now();
     this.open();
     this.heartbeatTimer = setInterval(() => {
@@ -74,6 +93,14 @@ export class JatekSse {
   private open() {
     if (this.stopped) return;
 
+    // Read token fresh so a refreshed JWT is used on every reconnect
+    const token = this.getToken();
+    if (!token) {
+      // No token yet — wait and retry
+      this.scheduleReconnect();
+      return;
+    }
+
     const xhr = new XMLHttpRequest();
     this.xhr = xhr;
     this.responseOffset = 0;
@@ -85,7 +112,7 @@ export class JatekSse {
       `${BASE_URL}/api/events?channels=${encodeURIComponent(this.channels.join(','))}`,
       true,
     );
-    xhr.setRequestHeader('Authorization', `Bearer ${this.token}`);
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     xhr.setRequestHeader('Accept', 'text/event-stream');
     xhr.setRequestHeader('Cache-Control', 'no-cache');
 
@@ -100,11 +127,21 @@ export class JatekSse {
     };
 
     xhr.onreadystatechange = () => {
+      if (this.stopped || this.xhr !== xhr) return;
+
       if (xhr.readyState >= 2 && xhr.status >= 200 && xhr.status < 300) {
+        this.retryCount = 0; // Reset backoff on successful connection
         this.setConnected(true);
+      } else if (xhr.readyState >= 2 && (xhr.status === 401 || xhr.status === 403)) {
+        // Auth error — stop reconnecting and notify the caller to re-authenticate
+        this.setConnected(false);
+        this.stopped = true; // Prevent scheduleReconnect from firing
+        this.authErrorHandlers.forEach((h) => h());
+        return;
       } else if (xhr.readyState >= 2 && xhr.status >= 400) {
         this.setConnected(false);
       }
+
       if (xhr.readyState === 3) consumeResponse();
       if (xhr.readyState === 4) {
         consumeResponse();
@@ -114,10 +151,12 @@ export class JatekSse {
     };
     xhr.onprogress = consumeResponse;
     xhr.onerror = () => {
+      if (this.stopped || this.xhr !== xhr) return;
       this.setConnected(false);
       this.scheduleReconnect();
     };
     xhr.ontimeout = () => {
+      if (this.stopped || this.xhr !== xhr) return;
       this.setConnected(false);
       this.scheduleReconnect();
     };
@@ -167,10 +206,13 @@ export class JatekSse {
 
   private scheduleReconnect() {
     if (this.stopped || this.reconnectTimer) return;
+    // Exponential backoff: 2 s → 4 s → 8 s → 16 s → 30 s (max)
+    const delay = Math.min(2_000 * Math.pow(2, this.retryCount), 30_000);
+    this.retryCount = Math.min(this.retryCount + 1, 10); // Cap to avoid overflow
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.open();
-    }, 2_000);
+    }, delay);
   }
 
   private setConnected(connected: boolean) {

@@ -243,6 +243,13 @@ class JatekApi {
     });
   }
 
+  async changePassword(currentPassword: string, newPassword: string): Promise<void> {
+    return this.request<void>('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+  }
+
   // ── Drivers ───────────────────────────────────────────────────────────────
 
   async listDrivers(): Promise<ApiDriverProfile[]> {
