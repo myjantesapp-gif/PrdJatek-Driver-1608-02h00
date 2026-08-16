@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "tGwc2kvu43CiSwGxd9IUt"
+uri = "file://attached_assets/generated_images/app_icon_for_jatek_4e2c.png"
+type = "image"
+title = "generated_image"

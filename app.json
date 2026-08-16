@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "Jatek Driver",
+    "slug": "jatekdriver",
+    "owner": "jatekplatform",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "jatekdriver",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0A0A0F"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.jatek.driver"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundColor": "#0A0A0F"
+      },
+      "package": "com.jatek.driver",
+      "permissions": [
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
+      ],
+      "versionCode": 10
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-notifications",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Jatek Driver utilise votre position pour suivre vos livraisons."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "f477d6ab-d379-4b47-a22d-03c45763cc11"
+      }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/f477d6ab-d379-4b47-a22d-03c45763cc11"
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    }
+  }
+}
