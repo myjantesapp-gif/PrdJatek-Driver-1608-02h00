@@ -201,10 +201,20 @@ class JatekApi {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
 
-    const res = await fetch(`${BASE_URL}${path}`, {
-      ...options,
-      headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
-    });
+    // Abort after 20 s so requests never hang forever
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20_000);
+
+    let res: Response;
+    try {
+      res = await fetch(`${BASE_URL}${path}`, {
+        ...options,
+        headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!expectJson) return {} as T;
 
@@ -365,7 +375,11 @@ export async function loadAuth(): Promise<{ token: string; userId: number; drive
   const userId = await AsyncStorage.getItem(AUTH_USER_KEY);
   const driverId = await AsyncStorage.getItem(AUTH_DRIVER_ID_KEY);
   if (!token || !userId || !driverId) return null;
-  return { token, userId: Number(userId), driverId: Number(driverId) };
+  const uid = Number(userId);
+  const did = Number(driverId);
+  // Guard against corrupted storage that would produce NaN IDs
+  if (!Number.isFinite(uid) || uid <= 0 || !Number.isFinite(did) || did <= 0) return null;
+  return { token, userId: uid, driverId: did };
 }
 
 export async function clearAuth() {

@@ -44,15 +44,19 @@ export default function MapScreen() {
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
 
   useEffect(() => {
+    let cancelled = false;
+
     if (Platform.OS !== 'web') {
       (async () => {
         try {
           const maps = await import('react-native-maps');
-          setMapView(() => maps.default);
-          setMarker(() => maps.Marker);
-          setPolyline(() => maps.Polyline);
-        } catch (e) {
-          // maps not available
+          if (!cancelled) {
+            setMapView(() => maps.default);
+            setMarker(() => maps.Marker);
+            setPolyline(() => maps.Polyline);
+          }
+        } catch {
+          // maps not available on this platform
         }
       })();
     }
@@ -60,40 +64,60 @@ export default function MapScreen() {
     (async () => {
       try {
         if (Platform.OS === 'web') {
-          navigator.geolocation?.getCurrentPosition(
-            (pos) => {
-              setLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
-              setLoading(false);
-            },
-            () => {
+          // Guard: navigator may be undefined in non-browser web environments
+          if (typeof navigator === 'undefined' || !navigator.geolocation) {
+            if (!cancelled) {
               setLocation(DEFAULT_REGION);
               setLoading(false);
+            }
+            return;
+          }
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              if (!cancelled) {
+                setLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+                setLoading(false);
+              }
+            },
+            () => {
+              if (!cancelled) {
+                setLocation(DEFAULT_REGION);
+                setLoading(false);
+              }
             },
           );
           return;
         }
         const { status: perm } = await Location.requestForegroundPermissionsAsync();
+        if (cancelled) return;
         if (perm !== 'granted') {
           setPermissionError(true);
           setLoading(false);
           return;
         }
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        setLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+        if (!cancelled) {
+          setLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+        }
       } catch {
-        setLocation(DEFAULT_REGION);
+        if (!cancelled) setLocation(DEFAULT_REGION);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
+
+    return () => { cancelled = true; };
   }, []);
 
   const openNavigation = (lat: number, lng: number, label: string) => {
+    // Coordinates (0, 0) are the fallback — refuse to navigate there
+    if (lat === 0 && lng === 0) return;
+    const encodedLabel = encodeURIComponent(label);
     const url = Platform.OS === 'ios'
-      ? `maps:0,0?q=${label}@${lat},${lng}`
-      : `geo:${lat},${lng}?q=${lat},${lng}(${label})`;
+      ? `maps:0,0?q=${encodedLabel}@${lat},${lng}`
+      : `geo:${lat},${lng}?q=${lat},${lng}(${encodedLabel})`;
     Linking.openURL(url).catch(() =>
-      Linking.openURL(`https://maps.google.com/?q=${lat},${lng}`),
+      Linking.openURL(`https://maps.google.com/?q=${lat},${lng}`).catch(() => {}),
     );
   };
 
@@ -190,31 +214,33 @@ export default function MapScreen() {
                 <Text style={styles.routeTitle}>Itinéraire actif</Text>
 
                 <TouchableOpacity
-                  style={styles.routeStep}
+                  style={[styles.routeStep, (activeOrder.restaurant.lat === 0 && activeOrder.restaurant.lng === 0) && styles.routeStepDisabled]}
                   onPress={() => openNavigation(activeOrder.restaurant.lat, activeOrder.restaurant.lng, activeOrder.restaurant.name)}
                   activeOpacity={0.8}
+                  disabled={activeOrder.restaurant.lat === 0 && activeOrder.restaurant.lng === 0}
                 >
                   <View style={[styles.stepDot, { backgroundColor: Colors.primary }]} />
                   <View style={styles.stepInfo}>
                     <Text style={styles.stepLabel}>Pickup</Text>
                     <Text style={styles.stepAddress} numberOfLines={1}>{activeOrder.restaurant.name}</Text>
                   </View>
-                  <Ionicons name="navigate-outline" size={20} color={Colors.primary} />
+                  <Ionicons name="navigate-outline" size={20} color={activeOrder.restaurant.lat === 0 && activeOrder.restaurant.lng === 0 ? Colors.textMuted : Colors.primary} />
                 </TouchableOpacity>
 
                 <View style={styles.routeLine} />
 
                 <TouchableOpacity
-                  style={styles.routeStep}
+                  style={[styles.routeStep, (activeOrder.customer.lat === 0 && activeOrder.customer.lng === 0) && styles.routeStepDisabled]}
                   onPress={() => openNavigation(activeOrder.customer.lat, activeOrder.customer.lng, activeOrder.customer.name)}
                   activeOpacity={0.8}
+                  disabled={activeOrder.customer.lat === 0 && activeOrder.customer.lng === 0}
                 >
                   <View style={[styles.stepDot, { backgroundColor: Colors.tertiary }]} />
                   <View style={styles.stepInfo}>
                     <Text style={styles.stepLabel}>Livraison</Text>
                     <Text style={styles.stepAddress} numberOfLines={1}>{activeOrder.customer.address}</Text>
                   </View>
-                  <Ionicons name="navigate-outline" size={20} color={Colors.tertiary} />
+                  <Ionicons name="navigate-outline" size={20} color={activeOrder.customer.lat === 0 && activeOrder.customer.lng === 0 ? Colors.textMuted : Colors.tertiary} />
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -435,5 +461,8 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     fontSize: 13,
     fontFamily: 'Poppins_500Medium',
+  },
+  routeStepDisabled: {
+    opacity: 0.4,
   },
 });

@@ -110,7 +110,7 @@ export default function OrdersScreen() {
                   {order.rating !== undefined && (
                     <View style={styles.ratingRow}>
                       <Ionicons name="star" size={12} color={Colors.secondary} />
-                      <Text style={styles.ratingText}>{order.rating}.0</Text>
+                      <Text style={styles.ratingText}>{Number.isInteger(order.rating) ? `${order.rating}.0` : String(order.rating)}</Text>
                     </View>
                   )}
                 </View>

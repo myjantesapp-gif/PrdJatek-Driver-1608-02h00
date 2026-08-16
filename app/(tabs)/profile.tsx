@@ -143,13 +143,14 @@ export default function ProfileScreen() {
 
         <Text style={styles.sectionLabel}>Documents</Text>
         <View style={styles.section}>
-          <DocumentRow label="Permis de conduire" status="valid" />
+          {/* Show "pending" when the driver hasn't completed their profile yet */}
+          <DocumentRow label="Permis de conduire" status={profile.vehiclePlate ? 'valid' : 'pending'} />
           <View style={styles.separator} />
-          <DocumentRow label="Assurance véhicule" status="valid" />
+          <DocumentRow label="Assurance véhicule" status={profile.vehiclePlate ? 'valid' : 'pending'} />
           <View style={styles.separator} />
-          <DocumentRow label="Carte grise" status="valid" />
+          <DocumentRow label="Carte grise" status={profile.vehiclePlate ? 'valid' : 'pending'} />
           <View style={styles.separator} />
-          <DocumentRow label="Carte d'identité" status="valid" />
+          <DocumentRow label="Carte d'identité" status={profile.vehiclePlate ? 'valid' : 'pending'} />
         </View>
 
         <Text style={styles.sectionLabel}>Paramètres</Text>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -80,6 +80,14 @@ export default function OrderDetailScreen() {
   const [otpSuccess, setOtpSuccess] = useState(false);
   const [otpSubmitting, setOtpSubmitting] = useState(false);
   const [otpKey, setOtpKey] = useState(0); // increment to reset OTPInput boxes
+  const timerRefs = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  // Clean up pending timers on unmount to avoid state updates on an unmounted screen
+  useEffect(() => {
+    return () => {
+      timerRefs.current.forEach(clearTimeout);
+    };
+  }, []);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom + 16;
@@ -126,17 +134,17 @@ export default function OrderDetailScreen() {
         if (Platform.OS !== 'web') {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }
-        setTimeout(() => router.back(), 1500);
+        timerRefs.current.push(setTimeout(() => router.back(), 1500));
       } else {
         setOtpError(true);
         if (Platform.OS !== 'web') {
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
         }
         // Reset input boxes so driver can re-enter the code
-        setTimeout(() => {
+        timerRefs.current.push(setTimeout(() => {
           setOtpError(false);
           setOtpKey((k) => k + 1);
-        }, 1200);
+        }, 1200));
       }
     } finally {
       setOtpSubmitting(false);
@@ -148,11 +156,13 @@ export default function OrderDetailScreen() {
   };
 
   const openMap = (lat: number, lng: number) => {
+    // Don't navigate to fallback (0,0) coordinates
+    if (lat === 0 && lng === 0) return;
     const url = Platform.OS === 'ios'
       ? `maps:0,0?q=Destination@${lat},${lng}`
       : `geo:${lat},${lng}?q=${lat},${lng}`;
     Linking.openURL(url).catch(() =>
-      Linking.openURL(`https://maps.google.com/?q=${lat},${lng}`),
+      Linking.openURL(`https://maps.google.com/?q=${lat},${lng}`).catch(() => {}),
     );
   };
 

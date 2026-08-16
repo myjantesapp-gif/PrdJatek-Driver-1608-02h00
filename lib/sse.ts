@@ -121,7 +121,13 @@ export class JatekSse {
       this.setConnected(false);
       this.scheduleReconnect();
     };
-    xhr.send();
+    try {
+      xhr.send();
+    } catch (err) {
+      // xhr.send() can throw synchronously on some platforms
+      this.setConnected(false);
+      this.scheduleReconnect();
+    }
   }
 
   private consumeEvents() {

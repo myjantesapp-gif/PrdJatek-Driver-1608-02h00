@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Animated } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Animated, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Colors } from '@/constants/colors';
@@ -19,7 +19,8 @@ const STATUS_CONFIG = {
 
 export function StatusToggle({ status, onToggle, disabled = false }: StatusToggleProps) {
   const config = STATUS_CONFIG[status];
-  const pulseAnim = new Animated.Value(1);
+  // Keep the Animated.Value stable across re-renders with useRef
+  const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     if (status === 'online') {
@@ -31,11 +32,16 @@ export function StatusToggle({ status, onToggle, disabled = false }: StatusToggl
       );
       pulse.start();
       return () => pulse.stop();
+    } else {
+      // Reset scale when not online so pulse ring doesn't stay enlarged
+      pulseAnim.setValue(1);
     }
-  }, [status]);
+  }, [status, pulseAnim]);
 
   const handlePress = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    }
     onToggle();
   };
 

@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Stack, router } from 'expo-router';
+import { Stack, router, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -17,15 +17,23 @@ const queryClient = new QueryClient();
 
 function RootNavigator() {
   const { user, isLoading } = useAuth();
+  const segments = useSegments();
 
   useEffect(() => {
     if (isLoading) return;
-    if (user) {
+
+    const inAuthGroup = segments[0] === '(tabs)';
+    const inLogin = segments[0] === 'login';
+
+    if (user && !inAuthGroup) {
+      // Authenticated but not in the tabs — redirect to tabs
       router.replace('/(tabs)');
-    } else {
+    } else if (!user && !inLogin) {
+      // Not authenticated and not already on login
       router.replace('/login');
     }
-  }, [user, isLoading]);
+    // Otherwise already on the correct screen — do not redirect
+  }, [user, isLoading, segments]);
 
   if (isLoading) return null;
 

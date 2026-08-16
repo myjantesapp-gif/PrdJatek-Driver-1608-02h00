@@ -367,18 +367,27 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
   // ── Persist & sync status ────────────────────────────────────────────────────
 
+  // Version counter prevents a stale request from rolling back a newer status change
+  const statusVersionRef = useRef(0);
+
   const setStatus = useCallback(async (s: DriverStatus) => {
-    const prev = status;
+    const version = ++statusVersionRef.current;
+    const prev = statusRef.current;
     setStatusState(s);
+    statusRef.current = s;
     if (driverId && s !== 'busy') {
       try {
         await api.updateDriver(driverId, { isAvailable: s === 'online' });
       } catch (err) {
-        console.warn('[DriverContext] updateDriver status failed — rolling back:', err);
-        setStatusState(prev);
+        // Only roll back if no newer call has already changed the status
+        if (statusVersionRef.current === version) {
+          console.warn('[DriverContext] updateDriver status failed — rolling back:', err);
+          setStatusState(prev);
+          statusRef.current = prev;
+        }
       }
     }
-  }, [driverId, status]);
+  }, [driverId]);
 
   // ── Driver location sync ─────────────────────────────────────────────────────
 

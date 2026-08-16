@@ -25,6 +25,12 @@ export function LiveOrderAlert({ order, onAccept, onDecline }: LiveOrderAlertPro
   const slideAnim = useRef(new Animated.Value(400)).current;
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Keep callback refs fresh so the interval always calls the latest version
+  const onDeclineRef = useRef(onDecline);
+  const onAcceptRef = useRef(onAccept);
+  useEffect(() => { onDeclineRef.current = onDecline; }, [onDecline]);
+  useEffect(() => { onAcceptRef.current = onAccept; }, [onAccept]);
+
   useEffect(() => {
     Animated.spring(slideAnim, {
       toValue: 0,
@@ -34,14 +40,14 @@ export function LiveOrderAlert({ order, onAccept, onDecline }: LiveOrderAlertPro
     }).start();
 
     if (Platform.OS !== 'web') {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
     }
 
     timerRef.current = setInterval(() => {
       setTimeLeft((t) => {
         if (t <= 1) {
           if (timerRef.current) clearInterval(timerRef.current);
-          onDecline();
+          onDeclineRef.current();
           return 0;
         }
         return t - 1;
@@ -51,6 +57,7 @@ export function LiveOrderAlert({ order, onAccept, onDecline }: LiveOrderAlertPro
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const totalItems = order.items.reduce((s, i) => s + i.quantity, 0);
@@ -58,18 +65,18 @@ export function LiveOrderAlert({ order, onAccept, onDecline }: LiveOrderAlertPro
 
   const handleAccept = () => {
     if (Platform.OS !== 'web') {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     }
     if (timerRef.current) clearInterval(timerRef.current);
-    onAccept();
+    onAcceptRef.current();
   };
 
   const handleDecline = () => {
     if (Platform.OS !== 'web') {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     }
     if (timerRef.current) clearInterval(timerRef.current);
-    onDecline();
+    onDeclineRef.current();
   };
 
   return (

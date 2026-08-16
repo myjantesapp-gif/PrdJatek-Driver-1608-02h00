@@ -15,7 +15,7 @@ function ErrorFallback({ error }: { error?: Error }) {
     <View style={[styles.container, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24 }]}>
       <Text style={styles.title}>Une erreur est survenue</Text>
       {__DEV__ && error && <Text style={styles.message}>{error.message}</Text>}
-      <TouchableOpacity style={styles.button} onPress={() => reloadAppAsync()}>
+      <TouchableOpacity style={styles.button} onPress={() => reloadAppAsync().catch(() => {})}>
         <Text style={styles.buttonText}>Redémarrer</Text>
       </TouchableOpacity>
     </View>

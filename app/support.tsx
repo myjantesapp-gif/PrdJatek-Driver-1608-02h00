@@ -72,6 +72,14 @@ export default function SupportScreen() {
   const [input, setInput] = useState('');
   const [tab, setTab] = useState<'chat' | 'faq'>('chat');
   const flatListRef = useRef<FlatList>(null);
+  const replyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clean up pending reply timer on unmount
+  React.useEffect(() => {
+    return () => {
+      if (replyTimerRef.current) clearTimeout(replyTimerRef.current);
+    };
+  }, []);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
@@ -95,7 +103,9 @@ export default function SupportScreen() {
     const replyKey = Object.keys(AUTO_REPLIES).find((k) => k !== 'default' && lower.includes(k)) ?? 'default';
     const replyText = AUTO_REPLIES[replyKey];
 
-    setTimeout(() => {
+    if (replyTimerRef.current) clearTimeout(replyTimerRef.current);
+    replyTimerRef.current = setTimeout(() => {
+      replyTimerRef.current = null;
       const replyMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         text: replyText,
