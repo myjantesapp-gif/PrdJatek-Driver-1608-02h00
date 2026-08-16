@@ -216,7 +216,13 @@ class JatekApi {
       clearTimeout(timeoutId);
     }
 
-    if (!expectJson) return {} as T;
+    if (!expectJson) {
+      // Still check HTTP status for no-body requests so callers can catch failures.
+      if (!res.ok) {
+        throw new ApiError(`HTTP ${res.status}`, res.status, null);
+      }
+      return {} as T;
+    }
 
     const text = await res.text();
     let data: any;
@@ -348,6 +354,26 @@ class JatekApi {
 
   async getNotifications(): Promise<ApiNotificationsResponse> {
     return this.request<ApiNotificationsResponse>('/api/notifications');
+  }
+
+  /**
+   * Mark a single notification as read.
+   * Tries the dedicated /read endpoint first; falls back to a PATCH with body.
+   * Propagates an error if both attempts fail so callers can roll back UI state.
+   */
+  async markNotificationRead(id: number): Promise<void> {
+    try {
+      // Primary: PATCH /api/notifications/:id/read (no body)
+      await this.request<void>(`/api/notifications/${id}/read`, { method: 'PATCH' }, false);
+      return; // success — stop here
+    } catch {
+      // Primary failed — fall through to alternate
+    }
+    // Fallback: PATCH with JSON body; let this throw if it also fails
+    await this.request<void>(`/api/notifications/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ read: true }),
+    }, false);
   }
 }
 

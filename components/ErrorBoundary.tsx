@@ -2,17 +2,17 @@ import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Colors } from '@/constants/colors';
 import { reloadAppAsync } from 'expo';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface ErrorBoundaryState {
   hasError: boolean;
   error?: Error;
 }
 
+// Fallback does NOT use useSafeAreaInsets — ErrorBoundary may sit above
+// SafeAreaProvider in the tree, so the hook would throw a second error.
 function ErrorFallback({ error }: { error?: Error }) {
-  const insets = useSafeAreaInsets();
   return (
-    <View style={[styles.container, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24 }]}>
+    <View style={styles.container}>
       <Text style={styles.title}>Une erreur est survenue</Text>
       {__DEV__ && error && <Text style={styles.message}>{error.message}</Text>}
       <TouchableOpacity style={styles.button} onPress={() => reloadAppAsync().catch(() => {})}>
@@ -54,6 +54,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
+    paddingTop: 80,
+    paddingBottom: 40,
   },
   title: {
     color: Colors.text,

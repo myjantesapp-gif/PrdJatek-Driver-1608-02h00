@@ -4,7 +4,8 @@ import { router } from 'expo-router';
 import * as Location from 'expo-location';
 import { api, ApiDriverProfile, ApiOrder, ApiAvailableOrder, ApiEarnings, ApiError } from '@/lib/api';
 import { JatekSse, SseEvent } from '@/lib/sse';
-import { configureNotifications, notifyNewOrder } from '@/lib/notifications';
+import * as ExpoNotifications from 'expo-notifications';
+import { configureNotifications, notifyNewOrder, addNotificationResponseListener, getLastNotificationResponse } from '@/lib/notifications';
 import { useAuth } from '@/context/AuthContext';
 
 export type DriverStatus = 'online' | 'offline' | 'busy';
@@ -72,8 +73,9 @@ export interface DeliveryHistory extends Order {
   completedAt: string;
 }
 
-// Map API status → app status
-function mapApiStatus(apiStatus: string): Order['status'] {
+// Map API status → app status. Returns null for genuinely unknown statuses so
+// callers can filter them out rather than treating them as new incoming offers.
+function mapApiStatus(apiStatus: string): Order['status'] | null {
   // Normalize: trim whitespace and lowercase
   const s = apiStatus?.trim().toLowerCase() ?? '';
   switch (s) {
@@ -95,7 +97,7 @@ function mapApiStatus(apiStatus: string): Order['status'] {
     case 'completed':         return 'completed';
     case 'cancelled':
     case 'canceled':          return 'cancelled';
-    default:                  return 'incoming';
+    default:                  return null; // unknown — caller must handle
   }
 }
 
@@ -183,6 +185,9 @@ function mapApiOrder(apiOrder: ApiOrder, driverId: number): Order {
 
   const distance = Number(apiOrder.distance) || 0;
 
+  // Fall back to 'incoming' for unmapped statuses so the order is not dropped
+  const mappedStatus = mapApiStatus(apiOrder.status) ?? 'incoming';
+
   return {
     id: String(apiOrder.id),
     apiId: apiOrder.id,
@@ -206,7 +211,7 @@ function mapApiOrder(apiOrder: ApiOrder, driverId: number): Order {
     estimatedPickup: apiOrder.estimatedPickupTime ?? 5,
     estimatedDelivery: apiOrder.estimatedDeliveryTime ?? (distance > 0 ? Math.floor(distance * 3 + 5) : 15),
     otp: apiOrder.otp ?? apiOrder.deliveryCode ?? apiOrder.pickupCode ?? apiOrder.kitchenCode ?? '',
-    status: mapApiStatus(apiOrder.status),
+    status: mappedStatus,
     createdAt: apiOrder.createdAt,
     completedAt: apiOrder.completedAt,
     tip,
@@ -224,7 +229,7 @@ interface DriverContextType {
   history: DeliveryHistory[];
   acceptOrder: () => Promise<void>;
   declineOrder: () => void;
-  updateOrderStatus: (id: string, status: Order['status']) => void;
+  updateOrderStatus: (id: string, status: Order['status']) => Promise<void>;
   validateOTP: (id: string, code: string) => Promise<boolean>;
   dismissIncoming: () => void;
   isApiConnected: boolean;
@@ -249,7 +254,7 @@ type DriverCoordinates = {
 };
 
 export function DriverProvider({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const driverId = user?.driverId ?? null;
 
   const [status, setStatusState] = useState<DriverStatus>('offline');
@@ -286,10 +291,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   /**
    * Offers removed because the server already assigned them elsewhere (409/SSE)
    * or because the driver's profile is not eligible (412).
-   *
-   * The available-orders endpoint can briefly return a stale snapshot after an
-   * atomic assignment. Keeping these IDs suppressed until they disappear from
-   * the endpoint prevents the same offer from being shown again immediately.
    */
   const suppressedOfferIds = useRef<Set<number>>(new Set());
   const driverLocationRef = useRef<DriverCoordinates | null>(null);
@@ -297,13 +298,20 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const locationRequestInFlightRef = useRef(false);
   const locationPermissionRef = useRef<'unknown' | 'granted' | 'denied'>('unknown');
   const acceptingOrderIdRef = useRef<number | null>(null);
+  /** Prevent duplicate in-flight status transitions */
+  const isUpdatingStatusRef = useRef(false);
+  /** Stable ref to latest activeOrder — read inside notification listener without stale closure */
+  const activeOrderRef = useRef<Order | null>(null);
 
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
 
+  useEffect(() => {
+    activeOrderRef.current = activeOrder;
+  }, [activeOrder]);
+
   // Reset seen-order tracking whenever the driver identity changes (login/logout)
-  // so that reassigned orders surface again on a fresh session.
   useEffect(() => {
     seenOrderIds.current.clear();
     pendingQueueRef.current = [];
@@ -338,8 +346,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!driverId) return;
 
-    // Ask for push permission by default for an authenticated driver.
-    // Web is a no-op; native devices receive order alerts in foreground.
+    // Ask for push permission; web is a no-op
     configureNotifications().catch(() => {});
 
     const loadEarnings = async () => {
@@ -365,9 +372,39 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     loadEarnings();
   }, [driverId, refreshProfile]);
 
+  // ── Wire notification tap → navigate to active order ────────────────────────
+
+  useEffect(() => {
+    if (!driverId) return;
+
+    // Shared routing logic for both cold-start and foreground/background taps
+    const handleNotificationResponse = (response: ExpoNotifications.NotificationResponse) => {
+      const data = (response.notification.request.content.data ?? null) as Record<string, unknown> | null;
+      const orderId = data?.orderId ? String(data.orderId) : null;
+
+      if (orderId && activeOrderRef.current?.id === orderId) {
+        // The notification is for an order the driver already accepted — open detail
+        router.push(`/order/${orderId}` as any);
+      } else {
+        // For incoming offers (not yet accepted) the LiveOrderAlert is shown on
+        // the tabs screen — navigate there so the driver can act on it.
+        router.push('/(tabs)' as any);
+      }
+    };
+
+    // Handle cold-start: app launched from a terminated state by tapping a notification.
+    // getLastNotificationResponse returns the tap that launched the app (once only).
+    getLastNotificationResponse().then((response) => {
+      if (response) handleNotificationResponse(response);
+    }).catch(() => {});
+
+    // Handle foreground / background taps while the JS runtime is already alive.
+    const subscription = addNotificationResponseListener(handleNotificationResponse);
+    return () => subscription.remove();
+  }, [driverId]);
+
   // ── Persist & sync status ────────────────────────────────────────────────────
 
-  // Version counter prevents a stale request from rolling back a newer status change
   const statusVersionRef = useRef(0);
 
   const setStatus = useCallback(async (s: DriverStatus) => {
@@ -379,7 +416,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       try {
         await api.updateDriver(driverId, { isAvailable: s === 'online' });
       } catch (err) {
-        // Only roll back if no newer call has already changed the status
         if (statusVersionRef.current === version) {
           console.warn('[DriverContext] updateDriver status failed — rolling back:', err);
           setStatusState(prev);
@@ -442,8 +478,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           longitude: location.coords.longitude,
         };
       } catch {
-        // Location services and permissions are optional; do not interrupt the
-        // driver session when the device cannot provide a position.
         return null;
       }
     };
@@ -471,7 +505,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    // Sync once immediately, then every 10 seconds while active.
     syncLocation();
     locationIntervalRef.current = setInterval(syncLocation, DRIVER_LOCATION_POLL_MS);
 
@@ -486,23 +519,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
   // ── Order sync ───────────────────────────────────────────────────────────────
 
-  // Statuses that mean "newly assigned, needs driver acceptance" — must go
-  // through the incoming-alert flow, not be treated as active in-progress orders.
   const INCOMING_STATUSES = ['pending', 'assigned'];
-  // Statuses that represent a terminal / done state
   const TERMINAL_STATUSES = ['delivered', 'completed', 'cancelled', 'canceled'];
 
-  /** Cache of the last successful API response — used by action handlers to
-   *  immediately advance the queue without waiting for the next polling cycle. */
   const lastOrdersRef = useRef<ApiOrder[]>([]);
 
-  /**
-   * Pop the next valid pending order from `pendingQueueRef` and return it as a
-   * mapped Order, or null if the queue is empty / all entries are stale.
-   * Checks both the assigned-orders cache and the available-orders cache.
-   * Uses the enrichedOrderCache for coordinates when available.
-   * Mutates pendingQueueRef in place.
-   */
   const popNextFromQueue = useCallback(
     (assignedOrders: ApiOrder[], availableOrders: ApiAvailableOrder[]): Order | null => {
       if (!driverId) return null;
@@ -533,25 +554,12 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         if (available) {
           return mapAvailableOrder(available);
         }
-
-        // Order no longer in either list — skip (already assigned to someone else)
       }
       return null;
     },
     [driverId],
   );
 
-  /**
-   * Display `order` as an incoming alert, start its 25-second auto-expire
-   * timer, and fire the push notification.
-   *
-   * When the timer fires the order is treated as a missed/expired alert:
-   *   • its ID is removed from seenOrderIds so reassignment makes it reappear
-   *   • the next queued order (if any) is shown immediately
-   *
-   * `showOrderAlert` is defined without useCallback so we can reference itself
-   * recursively through the advanceQueueRef without stale closure issues.
-   */
   const advanceQueueRef = useRef<() => void>(() => {});
 
   const showOrderAlert = useCallback((order: Order) => {
@@ -559,19 +567,34 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     notifyNewOrder({
       restaurantName: order.restaurant.name,
       earnings: order.earnings,
+      orderId: order.id,
     }).catch(() => {});
 
     if (incomingTimerRef.current) clearTimeout(incomingTimerRef.current);
     incomingTimerRef.current = setTimeout(() => {
-      // Auto-expired — remove from seen so reassignment can reappear
       seenOrderIds.current.delete(order.apiId);
-      // Immediately advance to next queued order (if any)
       advanceQueueRef.current();
     }, 25000);
-  }, []);
 
-  // Keep the ref in sync with the latest orders cache so the timer callback
-  // always uses fresh data without needing to recreate the timer.
+    // If this order has missing coordinates, update it once enrichment completes
+    if (order.restaurant.lat === 0 && order.restaurant.lng === 0) {
+      const cachedEnriched = enrichedOrderCache.current.get(order.apiId);
+      if (cachedEnriched) {
+        setIncomingOrder(cachedEnriched);
+      } else if (driverId) {
+        api.getOrder(order.apiId).then((full) => {
+          const enriched = mapApiOrder(full, driverId);
+          const withIncoming = { ...enriched, status: 'incoming' as const };
+          enrichedOrderCache.current.set(order.apiId, withIncoming);
+          // Update the displayed alert if it's still showing this order
+          setIncomingOrder((current) =>
+            current?.apiId === order.apiId ? withIncoming : current,
+          );
+        }).catch(() => {/* non-critical */});
+      }
+    }
+  }, [driverId]);
+
   const advanceQueue = useCallback(() => {
     const next = popNextFromQueue(lastOrdersRef.current, lastAvailableOrdersRef.current);
     if (next) {
@@ -585,8 +608,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     advanceQueueRef.current = advanceQueue;
   }, [advanceQueue]);
 
-  // Stable ref so the SSE useEffect closure always calls the latest version
-  // of pollOrders without needing to be in the effect's dependency array.
   const pollOrdersRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const pollOrders = useCallback(async () => {
@@ -594,9 +615,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     try {
       const currentStatus = statusRef.current;
       const isOnline = currentStatus === 'online';
-      // Assigned orders are still reconciled while offline so an existing
-      // delivery cannot become stale. Unassigned offers, however, must only
-      // be fetched and queued for an online driver.
       const [assignedResult, availableResult] = await Promise.allSettled([
         api.getOrders(),
         isOnline ? api.getAvailableOrders() : Promise.resolve([] as ApiAvailableOrder[]),
@@ -608,27 +626,30 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       setLastSyncAt(new Date());
       setIsApiConnected(true);
 
-      // Cache for immediate use by action handlers
       lastOrdersRef.current = assigned;
       lastAvailableOrdersRef.current = available;
 
-       // A successful reconciliation makes a previously suppressed offer safe
-       // to show again only after it has actually disappeared server-side.
-       const visibleAvailableIds = new Set(available.map((order) => order.id));
-       suppressedOfferIds.current.forEach((id) => {
-         if (!visibleAvailableIds.has(id)) suppressedOfferIds.current.delete(id);
-       });
+      const visibleAvailableIds = new Set(available.map((order) => order.id));
+      suppressedOfferIds.current.forEach((id) => {
+        if (!visibleAvailableIds.has(id)) suppressedOfferIds.current.delete(id);
+      });
 
-      // My explicitly assigned orders (backend already filters by JWT,
-      // but also guard client-side in case backend returns more)
       const myOrders = assigned.filter(
         (o) => o.driverId === driverId || o.assignedDriverId === driverId,
       );
 
-      // ── Active in-progress orders (assigned to me, not terminal) ──────────
+      // ── Active in-progress orders ──────────────────────────────────────────
+      // Only include orders whose status maps to a known, in-progress app state.
+      // Unknown statuses (mapApiStatus → null) are excluded rather than
+      // treated as active, which would produce a 'busy' driver with no valid order.
       const activeApiOrders = myOrders.filter((o) => {
-        const s = o.status?.trim().toLowerCase() ?? '';
-        return s && !INCOMING_STATUSES.includes(s) && !TERMINAL_STATUSES.includes(s);
+        const mapped = mapApiStatus(o.status);
+        return (
+          mapped !== null &&
+          mapped !== 'incoming' &&   // not yet accepted — use incoming-offer flow
+          mapped !== 'completed' &&
+          mapped !== 'cancelled'
+        );
       });
 
       if (activeApiOrders.length > 0) {
@@ -646,27 +667,24 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         setStatusState('busy');
         setIncomingOrder(null);
       } else {
-        // ── BUG FIX: status stuck at 'busy' after delivery completes ──────────
-        // When the server no longer has an active order for this driver but the
-        // local status is still 'busy', the driver was in the middle of a
-        // delivery that has now finished (or was cancelled server-side). Reset
-        // to 'online' so the next poll cycle fetches available orders again.
+        // Reset busy→online when server no longer reports an active order.
+        // Persist to backend so it reflects the change and resumes accepting orders.
         if (statusRef.current === 'busy') {
           setStatusState('online');
           statusRef.current = 'online';
           setActiveOrder(null);
-          // Return now — the next 3-second poll will fetch available orders
-          // with the corrected 'online' status.
+          // Persist online status to backend (fire-and-forget)
+          api.updateDriver(driverId, { isAvailable: true }).catch((err) => {
+            console.warn('[DriverContext] failed to persist online reset:', err);
+          });
           return;
         }
 
         if (!isOnline) {
-          // Deliberately offline — do not retain offers. Remove their IDs so
-          // they can be offered again after the driver comes back online.
-           setIncomingOrder((currentIncoming) => {
-             if (currentIncoming) seenOrderIds.current.delete(currentIncoming.apiId);
-             return null;
-           });
+          setIncomingOrder((currentIncoming) => {
+            if (currentIncoming) seenOrderIds.current.delete(currentIncoming.apiId);
+            return null;
+          });
           for (const queuedId of pendingQueueRef.current) {
             seenOrderIds.current.delete(queuedId);
           }
@@ -680,15 +698,19 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         }
 
         // ── Incoming orders ────────────────────────────────────────────────
-        // 1. Pending/assigned orders explicitly assigned to this driver
         const pendingAssigned = myOrders.filter((o) =>
           INCOMING_STATUSES.includes(o.status?.trim().toLowerCase() ?? ''),
         );
-        // 2. Available orders visible to all drivers (unassigned, ready for pickup)
         const allIncoming = [
           ...pendingAssigned.map((o) => o.id),
           ...available
-            .filter((o) => !suppressedOfferIds.current.has(o.id))
+            .filter((o) => {
+              if (suppressedOfferIds.current.has(o.id)) return false;
+              // Filter out available orders with unknown/terminal statuses
+              const mapped = mapApiStatus(o.status);
+              if (mapped === null || mapped === 'completed' || mapped === 'cancelled') return false;
+              return true;
+            })
             .map((o) => o.id),
         ];
 
@@ -699,12 +721,15 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
             pendingQueueRef.current.push(id);
             enqueuedNew = true;
 
-            // Pre-fetch full order details for available-queue entries so that
-            // restaurant/customer coordinates are ready before the alert shows.
+            // Pre-fetch full order details so coordinates are ready when alert shows
             if (!enrichedOrderCache.current.has(id) && driverId) {
               api.getOrder(id).then((full) => {
                 const mapped = mapApiOrder(full, driverId);
                 enrichedOrderCache.current.set(id, { ...mapped, status: 'incoming' });
+                // If this order is currently being displayed, update it live
+                setIncomingOrder((current) =>
+                  current?.apiId === id ? { ...mapped, status: 'incoming' } : current,
+                );
               }).catch(() => {/* non-critical */});
             }
           }
@@ -761,8 +786,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     return Number.isFinite(id) && id > 0 ? id : null;
   };
 
-  // Keep the ref in sync so the SSE closure always calls the latest pollOrders
-  // without causing the SSE effect to tear down and rebuild.
   useEffect(() => {
     pollOrdersRef.current = pollOrders;
   }, [pollOrders]);
@@ -770,7 +793,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!driverId) return;
 
-    // Pass a getter so every reconnect attempt uses the freshest token
     const sse = new JatekSse(
       () => api.getToken(),
       ['available_orders', `driver_orders:${driverId}`],
@@ -778,20 +800,19 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
     const unsubStatus = sse.onStatusChange(setIsSocketConnected);
 
-    // On 401/403 the token is invalid — log out and stop reconnecting
+    // On 401/403: token is invalid — stop reconnecting and log the driver out
     const unsubAuth = sse.onAuthError(() => {
-      console.warn('[DriverContext] SSE auth error — token rejected by server');
-      // The API layer will also start failing; the user will see "API non connectée"
-      // and can re-login from the profile screen.
+      console.warn('[DriverContext] SSE auth error — token rejected by server, logging out');
       setIsSocketConnected(false);
+      setIsApiConnected(false);
+      // Logout clears the token and navigates to login via _layout.tsx
+      logout().catch(() => {});
     });
 
     const unsubEvent = sse.onEvent((event) => {
       const orderId = getSseOrderId(event);
 
       if (event.type === 'order_ready') {
-        // order_ready is intentionally small; reconcile through the available
-        // endpoint so the alert receives the correct flat order shape.
         pollOrdersRef.current();
         return;
       }
@@ -818,7 +839,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         });
       }
 
-      // Reconcile authoritative status and assigned-order details.
       pollOrdersRef.current();
     });
 
@@ -827,7 +847,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     // Initial sync
     pollOrdersRef.current();
 
-    // Polling remains a safety net for missed SSE frames and app backgrounding.
     fallbackPollRef.current = setInterval(() => pollOrdersRef.current(), FALLBACK_POLL_MS);
 
     return () => {
@@ -839,7 +858,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       setIsSocketConnected(false);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [driverId]); // intentionally only driverId — pollOrders is accessed via pollOrdersRef
+  }, [driverId]); // intentionally only driverId — pollOrders accessed via pollOrdersRef
 
   // ── Order actions ────────────────────────────────────────────────────────────
 
@@ -850,15 +869,13 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     acceptingOrderIdRef.current = orderToAccept.apiId;
     if (incomingTimerRef.current) clearTimeout(incomingTimerRef.current);
 
-    // Never create an active order before the server confirms the atomic
-    // assignment. A 409 must not render or navigate with unauthorized data.
     setIncomingOrder(null);
 
     try {
       const accepted = await api.acceptDelivery(orderToAccept.apiId, Number(driverId));
-       if (!accepted || typeof accepted !== 'object' || !Number.isFinite(Number(accepted.id))) {
-         throw new Error('Réponse invalide du serveur lors de l’acceptation.');
-       }
+      if (!accepted || typeof accepted !== 'object' || !Number.isFinite(Number(accepted.id))) {
+        throw new Error('Réponse invalide du serveur lors de l\'acceptation.');
+      }
       const mappedAccepted = mapApiOrder(accepted, driverId);
       enrichedOrderCache.current.delete(orderToAccept.apiId);
       lastAvailableOrdersRef.current = lastAvailableOrdersRef.current.filter(
@@ -877,8 +894,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         ? err.data as Record<string, any>
         : null;
 
-      // Remove the stale offer from every local queue before displaying the
-      // error. This prevents the next poll from immediately showing it again.
       lastAvailableOrdersRef.current = lastAvailableOrdersRef.current.filter(
         (order) => order.id !== orderToAccept.apiId,
       );
@@ -887,7 +902,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       seenOrderIds.current.delete(orderToAccept.apiId);
 
       if (status === 409) {
-         suppressedOfferIds.current.add(orderToAccept.apiId);
+        suppressedOfferIds.current.add(orderToAccept.apiId);
         Alert.alert(
           'Commande non disponible',
           'Désolé, cette commande a déjà été prise par un autre livreur.',
@@ -895,11 +910,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         advanceQueueRef.current();
       } else if (status === 412) {
         setStatusState('offline');
-         statusRef.current = 'offline';
-         suppressedOfferIds.current.add(orderToAccept.apiId);
+        statusRef.current = 'offline';
+        suppressedOfferIds.current.add(orderToAccept.apiId);
         Alert.alert(
           'Profil incomplet',
-          'Veuillez compléter vos informations de véhicule et pièces d’identité pour accepter des livraisons.',
+          'Veuillez compléter vos informations de véhicule et pièces d\'identité pour accepter des livraisons.',
           [{ text: 'Compléter le profil', onPress: () => router.push('/complete-profile') }],
         );
       } else {
@@ -907,7 +922,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           'Erreur',
           errorData?.error || (err instanceof Error
             ? err.message
-            : 'Impossible d’accepter la commande pour le moment.'),
+            : 'Impossible d\'accepter la commande pour le moment.'),
         );
         advanceQueueRef.current();
       }
@@ -919,15 +934,10 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const declineOrder = useCallback(() => {
     if (incomingTimerRef.current) clearTimeout(incomingTimerRef.current);
     if (incomingOrder) {
-      // Remove from seen set so the order can reappear if reassigned later
       seenOrderIds.current.delete(incomingOrder.apiId);
       enrichedOrderCache.current.delete(incomingOrder.apiId);
-      // Notify backend so it can reassign — fire-and-forget, non-blocking
-      api.updateOrderStatus(incomingOrder.apiId, 'rejected').catch(() => {
-        // Backend may not support 'rejected'; silently ignore
-      });
+      api.updateOrderStatus(incomingOrder.apiId, 'rejected').catch(() => {});
     }
-    // Immediately show the next queued order (or clear if none)
     advanceQueueRef.current();
   }, [incomingOrder]);
 
@@ -940,13 +950,22 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     advanceQueueRef.current();
   }, [incomingOrder]);
 
-  const updateOrderStatus = useCallback(async (id: string, newStatus: Order['status']) => {
+  /**
+   * Advance the active order's status. Returns a Promise so callers can await
+   * and disable UI during the request (preventing duplicate transitions).
+   */
+  const updateOrderStatus = useCallback(async (id: string, newStatus: Order['status']): Promise<void> => {
+    // Guard against concurrent in-flight transitions
+    if (isUpdatingStatusRef.current) return;
+    isUpdatingStatusRef.current = true;
+
     let previousStatus: Order['status'] | null = null;
     setActiveOrder((prev) => {
       if (!prev || prev.id !== id) return prev;
       previousStatus = prev.status;
       return { ...prev, status: newStatus };
     });
+
     const orderId = parseInt(id, 10);
     if (!isNaN(orderId) && driverId) {
       try {
@@ -971,7 +990,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           });
         }
         Alert.alert('Mise à jour impossible, vérifiez votre connexion');
+      } finally {
+        isUpdatingStatusRef.current = false;
       }
+    } else {
+      isUpdatingStatusRef.current = false;
     }
   }, [driverId]);
 
@@ -981,8 +1004,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
     const orderToComplete = activeOrder;
     try {
-      // The backend is authoritative for OTP validation. Do not clear the
-      // active order or update earnings until this request succeeds.
       await api.confirmDelivery(orderToComplete.apiId, code);
 
       const completed: DeliveryHistory = {
@@ -997,6 +1018,12 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         prev?.apiId === orderToComplete.apiId ? null : prev
       ));
       setStatusState('online');
+      statusRef.current = 'online';
+
+      // Persist online status to backend so driver can receive new orders
+      api.updateDriver(driverId, { isAvailable: true }).catch((err) => {
+        console.warn('[DriverContext] failed to persist online after delivery:', err);
+      });
 
       setEarnings((prev) => ({
         today: parseFloat((prev.today + orderToComplete.earnings).toFixed(2)),
@@ -1010,7 +1037,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         kmToday: parseFloat((prev.kmToday + orderToComplete.distance).toFixed(1)),
       }));
 
-      // Refresh server-calculated totals after the optimistic local update.
+      // Refresh server-calculated totals
       api.getEarnings(driverId).then((e) => {
         setEarnings({
           today: Number(e.today) || 0,
@@ -1066,7 +1093,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       isSocketConnected,
       lastSyncAt,
       refreshEarnings,
-       refreshProfile,
+      refreshProfile,
     }}>
       {children}
     </DriverContext.Provider>

@@ -180,14 +180,14 @@ export default function ProfileScreen() {
             icon="notifications-outline"
             label="Notifications"
             color={Colors.primary}
-            onPress={() => router.push('/notifications' as any)}
+            onPress={() => router.push('/notifications')}
           />
           <View style={styles.separator} />
           <ProfileRow
             icon="shield-outline"
             label="Confidentialité"
             color={Colors.textMuted}
-            onPress={() => router.push('/privacy' as any)}
+            onPress={() => router.push('/privacy')}
           />
         </View>
 

@@ -22,17 +22,17 @@ function RootNavigator() {
   useEffect(() => {
     if (isLoading) return;
 
-    const inAuthGroup = segments[0] === '(tabs)';
     const inLogin = segments[0] === 'login';
 
-    if (user && !inAuthGroup) {
-      // Authenticated but not in the tabs — redirect to tabs
+    if (user && inLogin) {
+      // Authenticated and still on login screen — send to tabs
       router.replace('/(tabs)');
     } else if (!user && !inLogin) {
       // Not authenticated and not already on login
       router.replace('/login');
     }
-    // Otherwise already on the correct screen — do not redirect
+    // All other cases: authenticated user on any non-login route (tabs, order detail,
+    // notifications, privacy, support, etc.) — do NOT redirect. Let them through.
   }, [user, isLoading, segments]);
 
   if (isLoading) return null;
@@ -59,6 +59,14 @@ function RootNavigator() {
           name="change-password"
           options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
         />
+        <Stack.Screen
+          name="notifications"
+          options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+        />
+        <Stack.Screen
+          name="privacy"
+          options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+        />
       </Stack>
     </>
   );
@@ -82,9 +90,9 @@ export default function RootLayout() {
   if (!fontsLoaded && !fontError) return null;
 
   return (
-    <ErrorBoundary>
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <ErrorBoundary>
           <QueryClientProvider client={queryClient}>
             <KeyboardProvider>
               <AuthProvider>
@@ -94,8 +102,8 @@ export default function RootLayout() {
               </AuthProvider>
             </KeyboardProvider>
           </QueryClientProvider>
-        </SafeAreaProvider>
-      </GestureHandlerRootView>
-    </ErrorBoundary>
+        </ErrorBoundary>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }

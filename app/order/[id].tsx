@@ -5,6 +5,7 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  ActivityIndicator,
   Platform,
   Linking,
   Alert,
@@ -79,6 +80,7 @@ export default function OrderDetailScreen() {
   const [otpError, setOtpError] = useState(false);
   const [otpSuccess, setOtpSuccess] = useState(false);
   const [otpSubmitting, setOtpSubmitting] = useState(false);
+  const [advancing, setAdvancing] = useState(false); // guard duplicate status transitions
   const [otpKey, setOtpKey] = useState(0); // increment to reset OTPInput boxes
   const timerRefs = useRef<ReturnType<typeof setTimeout>[]>([]);
 
@@ -106,19 +108,25 @@ export default function OrderDetailScreen() {
     );
   }
 
-  const advanceStatus = () => {
-    const currentIdx = STEPS.findIndex((s) => s.key === activeOrder.status);
-    if (activeOrder.status === 'picked_up') {
-      updateOrderStatus(activeOrder.id, 'delivering');
-      if (Platform.OS !== 'web') {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  const advanceStatus = async () => {
+    if (advancing) return;
+    setAdvancing(true);
+    try {
+      const currentIdx = STEPS.findIndex((s) => s.key === activeOrder.status);
+      if (activeOrder.status === 'picked_up') {
+        await updateOrderStatus(activeOrder.id, 'delivering');
+        if (Platform.OS !== 'web') {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        }
+      } else if (currentIdx >= 0 && currentIdx < STEPS.length - 2) {
+        const nextStatus = STEPS[currentIdx + 1].key as any;
+        await updateOrderStatus(activeOrder.id, nextStatus);
+        if (Platform.OS !== 'web') {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        }
       }
-    } else if (currentIdx >= 0 && currentIdx < STEPS.length - 2) {
-      const nextStatus = STEPS[currentIdx + 1].key as any;
-      updateOrderStatus(activeOrder.id, nextStatus);
-      if (Platform.OS !== 'web') {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      }
+    } finally {
+      setAdvancing(false);
     }
   };
 
@@ -299,9 +307,20 @@ export default function OrderDetailScreen() {
 
       {nextLabel && (
         <View style={[styles.footer, { paddingBottom: botPad }]}>
-          <TouchableOpacity style={styles.advanceBtn} onPress={advanceStatus} activeOpacity={0.85}>
-            <Text style={styles.advanceBtnText}>{nextLabel}</Text>
-            <Ionicons name="arrow-forward" size={18} color="#000" />
+          <TouchableOpacity
+            style={[styles.advanceBtn, advancing && styles.advanceBtnDisabled]}
+            onPress={advanceStatus}
+            disabled={advancing}
+            activeOpacity={0.85}
+          >
+            {advancing ? (
+              <ActivityIndicator size="small" color="#000" />
+            ) : (
+              <>
+                <Text style={styles.advanceBtnText}>{nextLabel}</Text>
+                <Ionicons name="arrow-forward" size={18} color="#000" />
+              </>
+            )}
           </TouchableOpacity>
         </View>
       )}
@@ -583,6 +602,9 @@ const styles = StyleSheet.create({
     color: '#000',
     fontSize: 16,
     fontFamily: 'Poppins_700Bold',
+  },
+  advanceBtnDisabled: {
+    opacity: 0.6,
   },
   notFoundContainer: {
     flex: 1,

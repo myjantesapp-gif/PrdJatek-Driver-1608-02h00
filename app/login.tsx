@@ -9,6 +9,7 @@ import {
   Platform,
   ActivityIndicator,
   ScrollView,
+  Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
@@ -51,11 +52,11 @@ export default function LoginScreen() {
       >
         {/* Logo / Brand */}
         <View style={styles.brand}>
-          <View style={styles.logoCircle}>
-            <Ionicons name="bicycle" size={36} color={Colors.primary} />
-          </View>
-          <Text style={styles.brandName}>Jatek Driver</Text>
-          <Text style={styles.brandSub}>Espace livreur</Text>
+          <Image
+            source={require('../assets/logo.png')}
+            style={styles.logo}
+            resizeMode="contain"
+          />
         </View>
 
         {/* Card */}
@@ -153,36 +154,18 @@ const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
     paddingHorizontal: 24,
-    paddingTop: 80,
+    paddingTop: 60,
     paddingBottom: 40,
     alignItems: 'center',
   },
   brand: {
     alignItems: 'center',
-    marginBottom: 40,
-    gap: 10,
+    marginBottom: 36,
   },
-  logoCircle: {
-    width: 80,
-    height: 80,
+  logo: {
+    width: 220,
+    height: 160,
     borderRadius: 24,
-    backgroundColor: 'rgba(233,30,140,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: Colors.primary + '40',
-    marginBottom: 4,
-  },
-  brandName: {
-    color: Colors.text,
-    fontSize: 28,
-    fontFamily: 'Poppins_800ExtraBold',
-    letterSpacing: -0.5,
-  },
-  brandSub: {
-    color: Colors.textMuted,
-    fontSize: 13,
-    fontFamily: 'Poppins_400Regular',
   },
   card: {
     width: '100%',

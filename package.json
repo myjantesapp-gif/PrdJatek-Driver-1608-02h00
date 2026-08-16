@@ -30,8 +30,7 @@
     "react-native-maps": "^1.18.0",
     "react-native-reanimated": "^4.5.3",
     "react-native-safe-area-context": "^5.8.0",
-    "react-native-web": "^0.21.2",
-    "socket.io-client": "^4.8.3"
+    "react-native-web": "^0.21.2"
   },
   "devDependencies": {
     "@expo/metro-config": "^57.0.7",
