@@ -670,6 +670,16 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         // Reset busy→online when server no longer reports an active order.
         // Persist to backend so it reflects the change and resumes accepting orders.
         if (statusRef.current === 'busy') {
+          // Guard against race condition: the API may still return the just-accepted
+          // order under its old status (pending/assigned) for a poll cycle or two
+          // before the server catches up. If the order still exists in myOrders under
+          // ANY status, keep the local busy/activeOrder state — don't clear yet.
+          const activeId = activeOrderRef.current?.apiId;
+          const orderStillInMyOrders = activeId
+            ? myOrders.some((o) => o.id === activeId)
+            : false;
+          if (orderStillInMyOrders) return; // server not caught up — preserve state
+
           setStatusState('online');
           statusRef.current = 'online';
           setActiveOrder(null);
