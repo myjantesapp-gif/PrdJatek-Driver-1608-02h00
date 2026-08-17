@@ -245,7 +245,7 @@ class JatekApi {
   async login(email: string, password: string): Promise<LoginResponse> {
     return this.request<LoginResponse>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
     });
   }
 
