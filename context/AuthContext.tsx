@@ -85,8 +85,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const res: LoginResponse = await api.login(email, password);
 
+    // Set token immediately so authenticated requests (listDrivers) work
+    api.setToken(res.token);
+
     // Find the driver record linked to this user
-    const drivers = await api.listDrivers();
+    let drivers;
+    try {
+      drivers = await api.listDrivers();
+    } catch (err) {
+      // If fetching drivers fails, clear token and re-throw
+      api.setToken(null);
+      throw err;
+    }
 
     // If a newer login attempt started, discard this result
     if (loginVersionRef.current !== version) return;
@@ -97,8 +107,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       api.setToken(null);
       throw new Error("Aucun profil livreur trouvé pour ce compte.");
     }
-
-    api.setToken(res.token);
     await saveAuth(res.token, res.user.id, myDriver.id);
     setUser({
       userId: res.user.id,
