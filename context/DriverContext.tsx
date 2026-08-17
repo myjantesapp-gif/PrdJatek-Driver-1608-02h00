@@ -83,16 +83,23 @@ function mapApiStatus(apiStatus: string): Order['status'] | null {
     case 'assigned':          return 'incoming';
     case 'accepted':          return 'accepted';
     case 'at_restaurant':
+    case 'at-restaurant':
     case 'ready_for_pickup':
+    case 'ready-for-pickup':
     case 'preparing':
     case 'ready':             return 'at_restaurant';
     case 'picked_up':
-    case 'pickedup':          return 'picked_up';
+    case 'pickedup':
+    case 'picked-up':         return 'picked_up';
     case 'en_route':
+    case 'en-route':
     case 'delivering':
     case 'in_progress':
+    case 'in-progress':
     case 'out_for_delivery':
-    case 'on_the_way':        return 'delivering';
+    case 'out-for-delivery':
+    case 'on_the_way':
+    case 'on-the-way':        return 'delivering';
     case 'delivered':
     case 'completed':         return 'completed';
     case 'cancelled':

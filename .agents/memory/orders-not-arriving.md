@@ -38,3 +38,13 @@ description: Three bugs that caused drivers to stop receiving order alerts on th
 ## Bonus — SSE exponential backoff
 
 `scheduleReconnect()` now uses `Math.min(2000 * 2^retryCount, 30000)` instead of flat 2 s. `retryCount` resets to 0 on a successful 2xx connection.
+
+---
+
+## Root cause 4 — API returns hyphenated statuses not matched in mapApiStatus (CRITICAL)
+
+**Rule:** `mapApiStatus` must include hyphenated variants for every status: `picked-up`, `en-route`, `at-restaurant`, `ready-for-pickup`, `in-progress`, `out-for-delivery`, `on-the-way`.
+
+**Why:** `ma.jatek.app` API returns `"picked-up"` (with hyphen) instead of `"picked_up"` (underscore). Unmatched statuses return `null`, which: (1) excludes the order from `activeApiOrders` → clears `activeOrder` → dashboard shows nothing; (2) causes `order/[id]` to hit the `!activeOrder` guard and show "Commande introuvable" — the driver is stuck on that screen. The same hyphen/underscore mismatch could affect `en-route`, `at-restaurant`, etc.
+
+**How to apply:** In the `mapApiStatus` switch, add a `case 'x-y':` line alongside every `case 'x_y':` line.
