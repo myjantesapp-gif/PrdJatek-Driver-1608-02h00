@@ -76,7 +76,8 @@ function StepProgress({ currentStatus }: { currentStatus: string }) {
 export default function OrderDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
-  const { activeOrder, updateOrderStatus, validateOTP } = useDriver();
+  const { activeOrder, terminalOrder, updateOrderStatus, validateOTP } = useDriver();
+  const [retainedOrder, setRetainedOrder] = useState<typeof activeOrder>(null);
   const [otpError, setOtpError] = useState(false);
   const [otpSuccess, setOtpSuccess] = useState(false);
   const [otpSubmitting, setOtpSubmitting] = useState(false);
@@ -91,15 +92,28 @@ export default function OrderDetailScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    if (activeOrder?.id === id) {
+      setRetainedOrder(activeOrder);
+    }
+  }, [activeOrder, id]);
+
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom + 16;
+  const order = terminalOrder?.id === id
+    ? terminalOrder
+    : activeOrder?.id === id
+      ? activeOrder
+      : retainedOrder?.id === id
+        ? retainedOrder
+        : null;
 
-  if (!activeOrder || activeOrder.id !== id) {
+  if (!order) {
     return (
       <View style={[styles.container, { paddingTop: topPad }]}>
         <View style={styles.notFoundContainer}>
-          <Ionicons name="receipt-outline" size={48} color={Colors.border} />
-          <Text style={styles.notFoundText}>Commande introuvable</Text>
+          <ActivityIndicator size="large" color={Colors.primary} />
+          <Text style={styles.notFoundText}>Synchronisation de la commande...</Text>
           <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
             <Text style={styles.backBtnText}>Retour</Text>
           </TouchableOpacity>
@@ -112,16 +126,16 @@ export default function OrderDetailScreen() {
     if (advancing) return;
     setAdvancing(true);
     try {
-      const currentIdx = STEPS.findIndex((s) => s.key === activeOrder.status);
-      if (activeOrder.status === 'picked_up') {
-        await updateOrderStatus(activeOrder.id, 'delivering');
-        if (Platform.OS !== 'web') {
+      const currentIdx = STEPS.findIndex((s) => s.key === order.status);
+      if (order.status === 'picked_up') {
+        const updated = await updateOrderStatus(order.id, 'delivering');
+        if (updated && Platform.OS !== 'web') {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         }
       } else if (currentIdx >= 0 && currentIdx < STEPS.length - 2) {
         const nextStatus = STEPS[currentIdx + 1].key as any;
-        await updateOrderStatus(activeOrder.id, nextStatus);
-        if (Platform.OS !== 'web') {
+        const updated = await updateOrderStatus(order.id, nextStatus);
+        if (updated && Platform.OS !== 'web') {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         }
       }
@@ -136,7 +150,7 @@ export default function OrderDetailScreen() {
     setOtpError(false);
 
     try {
-      const ok = await validateOTP(activeOrder.id, code);
+      const ok = await validateOTP(order.id, code);
       if (ok) {
         setOtpSuccess(true);
         if (Platform.OS !== 'web') {
@@ -159,27 +173,53 @@ export default function OrderDetailScreen() {
     }
   };
 
-  const callContact = (phone: string) => {
-    Linking.openURL(`tel:${phone}`).catch(() => {});
+  const callContact = async (phone: string) => {
+    const normalizedPhone = phone?.trim();
+    if (!normalizedPhone) return;
+    try {
+      const url = `tel:${normalizedPhone}`;
+      if (await Linking.canOpenURL(url)) {
+        await Linking.openURL(url);
+      }
+    } catch {
+      // Calling is not supported by this device.
+    }
   };
 
-  const openMap = (lat: number, lng: number) => {
-    // Don't navigate to fallback (0,0) coordinates
-    if (lat === 0 && lng === 0) return;
-    const url = Platform.OS === 'ios'
+  const openMap = async (lat: number, lng: number) => {
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng) ||
+      lat < -90 ||
+      lat > 90 ||
+      lng < -180 ||
+      lng > 180 ||
+      (lat === 0 && lng === 0)
+    ) {
+      return;
+    }
+    const nativeUrl = Platform.OS === 'ios'
       ? `maps:0,0?q=Destination@${lat},${lng}`
       : `geo:${lat},${lng}?q=${lat},${lng}`;
-    Linking.openURL(url).catch(() =>
-      Linking.openURL(`https://maps.google.com/?q=${lat},${lng}`).catch(() => {}),
-    );
+    const fallbackUrl = `https://maps.google.com/?q=${encodeURIComponent(`${lat},${lng}`)}`;
+    try {
+      const canOpenNative = await Linking.canOpenURL(nativeUrl);
+      await Linking.openURL(canOpenNative ? nativeUrl : fallbackUrl);
+    } catch {
+      try {
+        await Linking.openURL(fallbackUrl);
+      } catch {
+        // No browser or maps app is available.
+      }
+    }
   };
 
-  const isDelivering = activeOrder.status === 'delivering';
-  const totalItems = activeOrder.items.reduce((s, i) => s + i.quantity, 0);
-  const subtotal = activeOrder.items.reduce((s, i) => s + i.price * i.quantity, 0);
+  const isDelivering = order.status === 'delivering';
+  const totalItems = order.items.reduce((s, i) => s + i.quantity, 0);
+  const subtotal = order.items.reduce((s, i) => s + i.price * i.quantity, 0);
 
   const getNextButtonLabel = () => {
-    switch (activeOrder.status) {
+    switch (order.status) {
       case 'accepted': return 'Arrivé au restaurant';
       case 'at_restaurant': return 'Commande récupérée';
       case 'picked_up': return 'En route vers le client';
@@ -195,33 +235,33 @@ export default function OrderDetailScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.closeBtn}>
           <Ionicons name="close" size={22} color={Colors.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Commande #{activeOrder.id.slice(-6).toUpperCase()}</Text>
+        <Text style={styles.headerTitle}>Commande #{order.id.slice(-6).toUpperCase()}</Text>
         <View style={styles.earningsBadge}>
-          <Text style={styles.earningsText}>{activeOrder.earnings.toFixed(2)} €</Text>
+          <Text style={styles.earningsText}>{order.earnings.toFixed(2)} €</Text>
         </View>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        <StepProgress currentStatus={activeOrder.status} />
+        <StepProgress currentStatus={order.status} />
 
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <MaterialCommunityIcons name="store" size={18} color={Colors.primary} />
             <Text style={styles.sectionTitle}>Restaurant</Text>
           </View>
-          <Text style={styles.placeName}>{activeOrder.restaurant.name}</Text>
-          <Text style={styles.placeAddress}>{activeOrder.restaurant.address}</Text>
+          <Text style={styles.placeName}>{order.restaurant.name}</Text>
+          <Text style={styles.placeAddress}>{order.restaurant.address}</Text>
           <View style={styles.contactRow}>
             <TouchableOpacity
               style={styles.contactBtn}
-              onPress={() => callContact(activeOrder.restaurant.phone)}
+              onPress={() => callContact(order.restaurant.phone)}
             >
               <Ionicons name="call" size={16} color={Colors.primary} />
               <Text style={styles.contactBtnText}>Appeler</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.contactBtn, { borderColor: Colors.tertiary + '40' }]}
-              onPress={() => openMap(activeOrder.restaurant.lat, activeOrder.restaurant.lng)}
+              onPress={() => openMap(order.restaurant.lat, order.restaurant.lng)}
             >
               <Ionicons name="navigate" size={16} color={Colors.tertiary} />
               <Text style={[styles.contactBtnText, { color: Colors.tertiary }]}>Naviguer</Text>
@@ -234,19 +274,19 @@ export default function OrderDetailScreen() {
             <Ionicons name="person" size={18} color={Colors.tertiary} />
             <Text style={styles.sectionTitle}>Client</Text>
           </View>
-          <Text style={styles.placeName}>{activeOrder.customer.name}</Text>
-          <Text style={styles.placeAddress}>{activeOrder.customer.address}</Text>
+          <Text style={styles.placeName}>{order.customer.name}</Text>
+          <Text style={styles.placeAddress}>{order.customer.address}</Text>
           <View style={styles.contactRow}>
             <TouchableOpacity
               style={[styles.contactBtn, { borderColor: Colors.tertiary + '40' }]}
-              onPress={() => callContact(activeOrder.customer.phone)}
+              onPress={() => callContact(order.customer.phone)}
             >
               <Ionicons name="call" size={16} color={Colors.tertiary} />
               <Text style={[styles.contactBtnText, { color: Colors.tertiary }]}>Appeler</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.contactBtn, { borderColor: Colors.success + '40' }]}
-              onPress={() => openMap(activeOrder.customer.lat, activeOrder.customer.lng)}
+              onPress={() => openMap(order.customer.lat, order.customer.lng)}
             >
               <Ionicons name="navigate" size={16} color={Colors.success} />
               <Text style={[styles.contactBtnText, { color: Colors.success }]}>Naviguer</Text>
@@ -259,7 +299,7 @@ export default function OrderDetailScreen() {
             <Ionicons name="restaurant" size={18} color={Colors.secondary} />
             <Text style={styles.sectionTitle}>Articles ({totalItems})</Text>
           </View>
-          {activeOrder.items.map((item, i) => (
+          {order.items.map((item, i) => (
             <View key={i} style={styles.itemRow}>
               <View style={styles.itemQtyBadge}>
                 <Text style={styles.itemQty}>{item.quantity}</Text>
@@ -272,10 +312,10 @@ export default function OrderDetailScreen() {
             <Text style={styles.subtotalLabel}>Sous-total</Text>
             <Text style={styles.subtotalValue}>{subtotal.toFixed(2)} €</Text>
           </View>
-          {activeOrder.tip > 0 && (
+          {order.tip > 0 && (
             <View style={styles.subtotalRow}>
               <Text style={styles.subtotalLabel}>Pourboire</Text>
-              <Text style={[styles.subtotalValue, { color: Colors.success }]}>+{activeOrder.tip.toFixed(2)} €</Text>
+              <Text style={[styles.subtotalValue, { color: Colors.success }]}>+{order.tip.toFixed(2)} €</Text>
             </View>
           )}
         </View>
@@ -296,11 +336,19 @@ export default function OrderDetailScreen() {
           </View>
         )}
 
-        {otpSuccess && (
+        {(otpSuccess || order.status === 'completed') && (
           <View style={styles.successBox}>
             <Ionicons name="checkmark-circle" size={40} color={Colors.success} />
             <Text style={styles.successTitle}>Livraison confirmée !</Text>
-            <Text style={styles.successSub}>+{activeOrder.earnings.toFixed(2)} € ajoutés</Text>
+            <Text style={styles.successSub}>+{order.earnings.toFixed(2)} € ajoutés</Text>
+          </View>
+        )}
+
+        {order.status === 'cancelled' && (
+          <View style={styles.cancelledBox}>
+            <Ionicons name="close-circle" size={34} color={Colors.error} />
+            <Text style={styles.cancelledTitle}>Commande annulée</Text>
+            <Text style={styles.cancelledSub}>Cette commande a été annulée par le serveur.</Text>
           </View>
         )}
       </ScrollView>
@@ -582,6 +630,27 @@ const styles = StyleSheet.create({
     color: Colors.success,
     fontSize: 15,
     fontFamily: 'Poppins_600SemiBold',
+  },
+  cancelledBox: {
+    backgroundColor: Colors.error + '14',
+    borderRadius: Colors.radiusLg,
+    padding: 20,
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: Colors.error + '40',
+    marginBottom: 16,
+  },
+  cancelledTitle: {
+    color: Colors.error,
+    fontSize: 17,
+    fontFamily: 'Poppins_700Bold',
+  },
+  cancelledSub: {
+    color: Colors.textMuted,
+    fontSize: 13,
+    fontFamily: 'Poppins_400Regular',
+    textAlign: 'center',
   },
   footer: {
     padding: 16,

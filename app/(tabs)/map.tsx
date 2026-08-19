@@ -31,46 +31,31 @@ function MapPlaceholder({ message }: { message: string }) {
   );
 }
 
-type Coordinate = { latitude: number; longitude: number };
-
-function getSafeCoordinate(place?: { lat?: number; lng?: number } | null): Coordinate | null {
-  if (!place) return null;
-  const latitude = Number(place.lat);
-  const longitude = Number(place.lng);
-  if (
-    !Number.isFinite(latitude) ||
-    !Number.isFinite(longitude) ||
-    latitude < -90 ||
-    latitude > 90 ||
-    longitude < -180 ||
-    longitude > 180 ||
-    (latitude === 0 && longitude === 0)
-  ) {
-    return null;
-  }
-  return { latitude, longitude };
-}
-
-class MapRenderBoundary extends React.Component<
-  { children: React.ReactNode },
-  { hasError: boolean }
+class MapFallbackBoundary extends React.Component<
+  { children: React.ReactNode; message: string },
+  { failed: boolean }
 > {
-  state = { hasError: false };
+  state = { failed: false };
 
   static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-
-  componentDidCatch(error: Error) {
-    if (__DEV__) console.warn('[MapScreen] native map render failed:', error.message);
+    return { failed: true };
   }
 
   render() {
-    if (this.state.hasError) {
-      return <MapPlaceholder message="Carte indisponible sur cet appareil" />;
-    }
-    return this.props.children;
+    return this.state.failed ? <MapPlaceholder message={this.props.message} /> : this.props.children;
   }
+}
+
+function hasNavigableCoordinates(lat: number, lng: number) {
+  return (
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lng >= -180 &&
+    lng <= 180 &&
+    !(lat === 0 && lng === 0)
+  );
 }
 
 export default function MapScreen() {
@@ -82,7 +67,7 @@ export default function MapScreen() {
   const [MapView, setMapView] = useState<any>(null);
   const [Marker, setMarker] = useState<any>(null);
   const [Polyline, setPolyline] = useState<any>(null);
-  const [mapLoadError, setMapLoadError] = useState(false);
+  const [mapUnavailable, setMapUnavailable] = useState(false);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
 
@@ -93,13 +78,15 @@ export default function MapScreen() {
       (async () => {
         try {
           const maps = await import('react-native-maps');
+          const NativeMapView = maps.default;
+          if (!NativeMapView) throw new Error('Map component unavailable');
           if (!cancelled) {
-            setMapView(() => maps.default);
+            setMapView(() => NativeMapView);
             setMarker(() => maps.Marker);
             setPolyline(() => maps.Polyline);
           }
         } catch {
-          if (!cancelled) setMapLoadError(true);
+          if (!cancelled) setMapUnavailable(true);
         }
       })();
     }
@@ -115,19 +102,28 @@ export default function MapScreen() {
             }
             return;
           }
+          const fallbackTimer = setTimeout(() => {
+            if (!cancelled) {
+              setLocation(DEFAULT_REGION);
+              setLoading(false);
+            }
+          }, 12_000);
           navigator.geolocation.getCurrentPosition(
             (pos) => {
-              if (!cancelled && Number.isFinite(pos.coords.latitude) && Number.isFinite(pos.coords.longitude)) {
+              clearTimeout(fallbackTimer);
+              if (!cancelled) {
                 setLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
                 setLoading(false);
               }
             },
             () => {
+              clearTimeout(fallbackTimer);
               if (!cancelled) {
                 setLocation(DEFAULT_REGION);
                 setLoading(false);
               }
             },
+            { enableHighAccuracy: true, maximumAge: 10_000, timeout: 12_000 },
           );
           return;
         }
@@ -138,12 +134,13 @@ export default function MapScreen() {
           setLoading(false);
           return;
         }
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        if (
-          !cancelled &&
-          Number.isFinite(loc.coords.latitude) &&
-          Number.isFinite(loc.coords.longitude)
-        ) {
+        const loc = await Promise.race([
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error('Location request timed out')), 12_000);
+          }),
+        ]);
+        if (!cancelled) {
           setLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
         }
       } catch {
@@ -156,17 +153,25 @@ export default function MapScreen() {
     return () => { cancelled = true; };
   }, []);
 
-  const openNavigation = (lat: number, lng: number, label: string) => {
-    const coordinate = getSafeCoordinate({ lat, lng });
-    if (!coordinate) return;
-    const { latitude, longitude } = coordinate;
-    const encodedLabel = encodeURIComponent(label);
-    const url = Platform.OS === 'ios'
-      ? `maps:0,0?q=${encodedLabel}@${latitude},${longitude}`
-      : `geo:${latitude},${longitude}?q=${latitude},${longitude}(${encodedLabel})`;
-    Linking.openURL(url).catch(() =>
-      Linking.openURL(`https://maps.google.com/?q=${latitude},${longitude}`).catch(() => {}),
-    );
+  const openNavigation = async (lat: number, lng: number, label: string) => {
+    if (!hasNavigableCoordinates(lat, lng)) return;
+
+    const encodedLabel = encodeURIComponent(label || 'Destination');
+    const nativeUrl = Platform.OS === 'ios'
+      ? `maps:0,0?q=${encodedLabel}@${lat},${lng}`
+      : `geo:${lat},${lng}?q=${lat},${lng}(${encodedLabel})`;
+    const webUrl = `https://maps.google.com/?q=${encodeURIComponent(`${lat},${lng}`)}`;
+
+    try {
+      const canOpenNative = await Linking.canOpenURL(nativeUrl);
+      await Linking.openURL(canOpenNative ? nativeUrl : webUrl);
+    } catch {
+      try {
+        await Linking.openURL(webUrl);
+      } catch {
+        // There is no usable external maps application on this device.
+      }
+    }
   };
 
   const mapRegion = location
@@ -187,13 +192,15 @@ export default function MapScreen() {
         </View>
       );
     }
-    if (mapLoadError) return <MapPlaceholder message="Carte indisponible sur cet appareil" />;
-    if (!MapView) return <MapPlaceholder message="Chargement de la carte..." />;
-
-    const restaurantCoordinate = getSafeCoordinate(activeOrder?.restaurant);
-    const customerCoordinate = getSafeCoordinate(activeOrder?.customer);
+    if (!MapView) {
+      return (
+        <MapPlaceholder
+          message={mapUnavailable ? 'Carte indisponible sur cet appareil' : 'Chargement de la carte...'}
+        />
+      );
+    }
     return (
-      <MapRenderBoundary>
+      <MapFallbackBoundary message="La carte ne peut pas être affichée">
         <MapView
           style={StyleSheet.absoluteFill}
           region={mapRegion}
@@ -203,37 +210,40 @@ export default function MapScreen() {
         >
           {activeOrder && Marker && (
             <>
-              {restaurantCoordinate && (
+              {hasNavigableCoordinates(activeOrder.restaurant.lat, activeOrder.restaurant.lng) && (
                 <Marker
-                  coordinate={restaurantCoordinate}
+                  coordinate={{ latitude: activeOrder.restaurant.lat, longitude: activeOrder.restaurant.lng }}
                   title={activeOrder.restaurant.name}
                   pinColor={Colors.primary}
                 />
               )}
-              {customerCoordinate && (
+              {hasNavigableCoordinates(activeOrder.customer.lat, activeOrder.customer.lng) && (
                 <Marker
-                  coordinate={customerCoordinate}
+                  coordinate={{ latitude: activeOrder.customer.lat, longitude: activeOrder.customer.lng }}
                   title={activeOrder.customer.name}
                   pinColor={Colors.tertiary}
                 />
               )}
-              {Polyline && location && restaurantCoordinate && customerCoordinate && (
-                <Polyline
-                  coordinates={[location, restaurantCoordinate, customerCoordinate]}
-                  strokeColor={Colors.primary}
-                  strokeWidth={3}
-                  lineDashPattern={[1]}
-                />
-              )}
+              {Polyline && location &&
+                hasNavigableCoordinates(activeOrder.restaurant.lat, activeOrder.restaurant.lng) &&
+                hasNavigableCoordinates(activeOrder.customer.lat, activeOrder.customer.lng) && (
+                  <Polyline
+                    coordinates={[
+                      { latitude: location.latitude, longitude: location.longitude },
+                      { latitude: activeOrder.restaurant.lat, longitude: activeOrder.restaurant.lng },
+                      { latitude: activeOrder.customer.lat, longitude: activeOrder.customer.lng },
+                    ]}
+                    strokeColor={Colors.primary}
+                    strokeWidth={3}
+                    lineDashPattern={[1]}
+                  />
+                )}
             </>
           )}
         </MapView>
-      </MapRenderBoundary>
+      </MapFallbackBoundary>
     );
   };
-
-  const restaurantCoordinate = getSafeCoordinate(activeOrder?.restaurant);
-  const customerCoordinate = getSafeCoordinate(activeOrder?.customer);
 
   return (
     <View style={[styles.container, { paddingTop: topPad }]}>
@@ -267,33 +277,33 @@ export default function MapScreen() {
                 <Text style={styles.routeTitle}>Itinéraire actif</Text>
 
                 <TouchableOpacity
-                  style={[styles.routeStep, !restaurantCoordinate && styles.routeStepDisabled]}
+                  style={[styles.routeStep, !hasNavigableCoordinates(activeOrder.restaurant.lat, activeOrder.restaurant.lng) && styles.routeStepDisabled]}
                   onPress={() => openNavigation(activeOrder.restaurant.lat, activeOrder.restaurant.lng, activeOrder.restaurant.name)}
                   activeOpacity={0.8}
-                  disabled={!restaurantCoordinate}
+                  disabled={!hasNavigableCoordinates(activeOrder.restaurant.lat, activeOrder.restaurant.lng)}
                 >
                   <View style={[styles.stepDot, { backgroundColor: Colors.primary }]} />
                   <View style={styles.stepInfo}>
                     <Text style={styles.stepLabel}>Pickup</Text>
                     <Text style={styles.stepAddress} numberOfLines={1}>{activeOrder.restaurant.name}</Text>
                   </View>
-                  <Ionicons name="navigate-outline" size={20} color={!restaurantCoordinate ? Colors.textMuted : Colors.primary} />
+                  <Ionicons name="navigate-outline" size={20} color={!hasNavigableCoordinates(activeOrder.restaurant.lat, activeOrder.restaurant.lng) ? Colors.textMuted : Colors.primary} />
                 </TouchableOpacity>
 
                 <View style={styles.routeLine} />
 
                 <TouchableOpacity
-                  style={[styles.routeStep, !customerCoordinate && styles.routeStepDisabled]}
+                  style={[styles.routeStep, !hasNavigableCoordinates(activeOrder.customer.lat, activeOrder.customer.lng) && styles.routeStepDisabled]}
                   onPress={() => openNavigation(activeOrder.customer.lat, activeOrder.customer.lng, activeOrder.customer.name)}
                   activeOpacity={0.8}
-                  disabled={!customerCoordinate}
+                  disabled={!hasNavigableCoordinates(activeOrder.customer.lat, activeOrder.customer.lng)}
                 >
                   <View style={[styles.stepDot, { backgroundColor: Colors.tertiary }]} />
                   <View style={styles.stepInfo}>
                     <Text style={styles.stepLabel}>Livraison</Text>
                     <Text style={styles.stepAddress} numberOfLines={1}>{activeOrder.customer.address}</Text>
                   </View>
-                  <Ionicons name="navigate-outline" size={20} color={!customerCoordinate ? Colors.textMuted : Colors.tertiary} />
+                  <Ionicons name="navigate-outline" size={20} color={!hasNavigableCoordinates(activeOrder.customer.lat, activeOrder.customer.lng) ? Colors.textMuted : Colors.tertiary} />
                 </TouchableOpacity>
 
                 <TouchableOpacity

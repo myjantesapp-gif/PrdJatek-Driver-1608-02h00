@@ -48,3 +48,13 @@ description: Three bugs that caused drivers to stop receiving order alerts on th
 **Why:** `ma.jatek.app` API returns `"picked-up"` (with hyphen) instead of `"picked_up"` (underscore). Unmatched statuses return `null`, which: (1) excludes the order from `activeApiOrders` → clears `activeOrder` → dashboard shows nothing; (2) causes `order/[id]` to hit the `!activeOrder` guard and show "Commande introuvable" — the driver is stuck on that screen. The same hyphen/underscore mismatch could affect `en-route`, `at-restaurant`, etc.
 
 **How to apply:** In the `mapApiStatus` switch, add a `case 'x-y':` line alongside every `case 'x_y':` line.
+
+---
+
+## Active delivery reconciliation
+
+**Rule:** Treat a locally accepted delivery as active until its own server record explicitly confirms a terminal status. Polling callers must share an in-flight reconciliation, and a failed transition must wait for that reconciliation before rolling back an optimistic state.
+
+**Why:** An empty, delayed, unknown, or unrelated order payload is not proof that the current delivery ended. Independent overlapping polls can also apply stale data after a newer request, while a network timeout may occur after the server has committed a transition.
+
+**How to apply:** Do not infer completion from an absent order or a different active order. Preserve the local delivery for uncertain responses, reconcile status errors against the shared poll, and surface explicit terminal server states to open detail views so retained refresh snapshots cannot show stale actions.
