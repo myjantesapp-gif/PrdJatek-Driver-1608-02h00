@@ -307,6 +307,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const acceptingOrderIdRef = useRef<number | null>(null);
   /** Prevent duplicate in-flight status transitions */
   const isUpdatingStatusRef = useRef(false);
+  /** Tolerate a short API consistency gap after accepting an order. */
+  const activeMissingPollsRef = useRef(0);
   /** Stable ref to latest activeOrder — read inside notification listener without stale closure */
   const activeOrderRef = useRef<Order | null>(null);
 
@@ -326,6 +328,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     suppressedOfferIds.current.clear();
     driverLocationRef.current = null;
     locationPermissionRef.current = 'unknown';
+    activeMissingPollsRef.current = 0;
   }, [driverId]);
 
   // ── Load driver profile & earnings ──────────────────────────────────────────
@@ -660,6 +663,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       });
 
       if (activeApiOrders.length > 0) {
+        activeMissingPollsRef.current = 0;
         const activeApiOrder = activeApiOrders[0];
         const mapped = mapApiOrder(activeApiOrder, driverId);
         setActiveOrder((prev) => {
@@ -682,10 +686,30 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           // before the server catches up. If the order still exists in myOrders under
           // ANY status, keep the local busy/activeOrder state — don't clear yet.
           const activeId = activeOrderRef.current?.apiId;
-          const orderStillInMyOrders = activeId
-            ? myOrders.some((o) => o.id === activeId)
-            : false;
-          if (orderStillInMyOrders) return; // server not caught up — preserve state
+          const matchingOrder = activeId
+            ? myOrders.find((o) => o.id === activeId)
+            : undefined;
+          const matchingStatus = matchingOrder ? mapApiStatus(matchingOrder.status) : null;
+
+          // Preserve the accepted order while the backend is briefly stale or
+          // returns pending/assigned during the assignment race.
+          if (
+            matchingOrder &&
+            matchingStatus !== 'completed' &&
+            matchingStatus !== 'cancelled'
+          ) {
+            activeMissingPollsRef.current = 0;
+            return;
+          }
+
+          // A successful list response can still lag immediately after accept.
+          // Keep the local order for two polls (6s) instead of navigating the
+          // driver to a missing-order screen.
+          if (activeId && assignedResult.status === 'fulfilled' && !matchingOrder) {
+            activeMissingPollsRef.current += 1;
+            if (activeMissingPollsRef.current < 3) return;
+          }
+          activeMissingPollsRef.current = 0;
 
           setStatusState('online');
           statusRef.current = 'online';
@@ -973,44 +997,53 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
    */
   const updateOrderStatus = useCallback(async (id: string, newStatus: Order['status']): Promise<void> => {
     // Guard against concurrent in-flight transitions
-    if (isUpdatingStatusRef.current) return;
-    isUpdatingStatusRef.current = true;
+    if (isUpdatingStatusRef.current || !driverId) return;
+    const currentOrder = activeOrderRef.current;
+    if (!currentOrder || currentOrder.id !== id) return;
 
-    let previousStatus: Order['status'] | null = null;
-    setActiveOrder((prev) => {
-      if (!prev || prev.id !== id) return prev;
-      previousStatus = prev.status;
-      return { ...prev, status: newStatus };
-    });
+    isUpdatingStatusRef.current = true;
+    const previousStatus = currentOrder.status;
+    setActiveOrder((prev) => (
+      prev?.id === id ? { ...prev, status: newStatus } : prev
+    ));
 
     const orderId = parseInt(id, 10);
-    if (!isNaN(orderId) && driverId) {
-      try {
-        const updated = await api.updateOrderStatus(
-          orderId,
-          mapAppStatusToApi(newStatus),
-          { driverId },
-        );
-        const mappedUpdated = mapApiOrder(updated, driverId);
-        setActiveOrder((prev) => (
-          prev?.id === id
-            ? { ...prev, status: mappedUpdated.status }
-            : prev
-        ));
-      } catch (err) {
-        console.warn('[DriverContext] updateOrderStatus API call failed — rolling back:', err);
-        if (previousStatus !== null) {
-          const rolledBack = previousStatus;
-          setActiveOrder((prev) => {
-            if (!prev || prev.id !== id) return prev;
-            return { ...prev, status: rolledBack };
-          });
-        }
-        Alert.alert('Mise à jour impossible, vérifiez votre connexion');
-      } finally {
-        isUpdatingStatusRef.current = false;
+    try {
+      if (!Number.isFinite(orderId) || orderId <= 0) {
+        throw new Error('Identifiant de commande invalide.');
       }
-    } else {
+
+      const updated = await api.updateOrderStatus(
+        orderId,
+        mapAppStatusToApi(newStatus),
+        { driverId: Number(driverId) },
+      );
+      if (!updated || Number(updated.id) !== orderId) {
+        throw new Error('Réponse invalide du serveur.');
+      }
+
+      const serverStatus = mapApiStatus(updated.status);
+      if (!serverStatus || serverStatus === 'incoming') {
+        throw new Error('Statut de commande invalide renvoyé par le serveur.');
+      }
+
+      setActiveOrder((prev) => (
+        prev?.apiId === orderId
+          ? { ...prev, status: serverStatus }
+          : prev
+      ));
+    } catch (err) {
+      console.warn('[DriverContext] updateOrderStatus API call failed — rolling back:', err);
+      setActiveOrder((prev) => (
+        prev?.apiId === currentOrder.apiId
+          ? { ...prev, status: previousStatus }
+          : prev
+      ));
+      Alert.alert(
+        'Mise à jour impossible',
+        err instanceof Error ? err.message : 'Vérifiez votre connexion puis réessayez.',
+      );
+    } finally {
       isUpdatingStatusRef.current = false;
     }
   }, [driverId]);

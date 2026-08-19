@@ -31,6 +31,48 @@ function MapPlaceholder({ message }: { message: string }) {
   );
 }
 
+type Coordinate = { latitude: number; longitude: number };
+
+function getSafeCoordinate(place?: { lat?: number; lng?: number } | null): Coordinate | null {
+  if (!place) return null;
+  const latitude = Number(place.lat);
+  const longitude = Number(place.lng);
+  if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    longitude < -180 ||
+    longitude > 180 ||
+    (latitude === 0 && longitude === 0)
+  ) {
+    return null;
+  }
+  return { latitude, longitude };
+}
+
+class MapRenderBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error) {
+    if (__DEV__) console.warn('[MapScreen] native map render failed:', error.message);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <MapPlaceholder message="Carte indisponible sur cet appareil" />;
+    }
+    return this.props.children;
+  }
+}
+
 export default function MapScreen() {
   const insets = useSafeAreaInsets();
   const { activeOrder, status } = useDriver();
@@ -40,6 +82,7 @@ export default function MapScreen() {
   const [MapView, setMapView] = useState<any>(null);
   const [Marker, setMarker] = useState<any>(null);
   const [Polyline, setPolyline] = useState<any>(null);
+  const [mapLoadError, setMapLoadError] = useState(false);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
 
@@ -56,7 +99,7 @@ export default function MapScreen() {
             setPolyline(() => maps.Polyline);
           }
         } catch {
-          // maps not available on this platform
+          if (!cancelled) setMapLoadError(true);
         }
       })();
     }
@@ -74,7 +117,7 @@ export default function MapScreen() {
           }
           navigator.geolocation.getCurrentPosition(
             (pos) => {
-              if (!cancelled) {
+              if (!cancelled && Number.isFinite(pos.coords.latitude) && Number.isFinite(pos.coords.longitude)) {
                 setLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
                 setLoading(false);
               }
@@ -96,7 +139,11 @@ export default function MapScreen() {
           return;
         }
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        if (!cancelled) {
+        if (
+          !cancelled &&
+          Number.isFinite(loc.coords.latitude) &&
+          Number.isFinite(loc.coords.longitude)
+        ) {
           setLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
         }
       } catch {
@@ -110,14 +157,15 @@ export default function MapScreen() {
   }, []);
 
   const openNavigation = (lat: number, lng: number, label: string) => {
-    // Coordinates (0, 0) are the fallback — refuse to navigate there
-    if (lat === 0 && lng === 0) return;
+    const coordinate = getSafeCoordinate({ lat, lng });
+    if (!coordinate) return;
+    const { latitude, longitude } = coordinate;
     const encodedLabel = encodeURIComponent(label);
     const url = Platform.OS === 'ios'
-      ? `maps:0,0?q=${encodedLabel}@${lat},${lng}`
-      : `geo:${lat},${lng}?q=${lat},${lng}(${encodedLabel})`;
+      ? `maps:0,0?q=${encodedLabel}@${latitude},${longitude}`
+      : `geo:${latitude},${longitude}?q=${latitude},${longitude}(${encodedLabel})`;
     Linking.openURL(url).catch(() =>
-      Linking.openURL(`https://maps.google.com/?q=${lat},${lng}`).catch(() => {}),
+      Linking.openURL(`https://maps.google.com/?q=${latitude},${longitude}`).catch(() => {}),
     );
   };
 
@@ -139,48 +187,53 @@ export default function MapScreen() {
         </View>
       );
     }
+    if (mapLoadError) return <MapPlaceholder message="Carte indisponible sur cet appareil" />;
     if (!MapView) return <MapPlaceholder message="Chargement de la carte..." />;
+
+    const restaurantCoordinate = getSafeCoordinate(activeOrder?.restaurant);
+    const customerCoordinate = getSafeCoordinate(activeOrder?.customer);
     return (
-      <MapView
-        style={StyleSheet.absoluteFill}
-        region={mapRegion}
-        showsUserLocation
-        showsMyLocationButton={false}
-        customMapStyle={DARK_MAP_STYLE}
-      >
-        {activeOrder && Marker && (
-          <>
-            {activeOrder.restaurant.lat !== 0 && (
-              <Marker
-                coordinate={{ latitude: activeOrder.restaurant.lat, longitude: activeOrder.restaurant.lng }}
-                title={activeOrder.restaurant.name}
-                pinColor={Colors.primary}
-              />
-            )}
-            {activeOrder.customer.lat !== 0 && (
-              <Marker
-                coordinate={{ latitude: activeOrder.customer.lat, longitude: activeOrder.customer.lng }}
-                title={activeOrder.customer.name}
-                pinColor={Colors.tertiary}
-              />
-            )}
-            {Polyline && location && activeOrder.restaurant.lat !== 0 && activeOrder.customer.lat !== 0 && (
-              <Polyline
-                coordinates={[
-                  { latitude: location.latitude, longitude: location.longitude },
-                  { latitude: activeOrder.restaurant.lat, longitude: activeOrder.restaurant.lng },
-                  { latitude: activeOrder.customer.lat, longitude: activeOrder.customer.lng },
-                ]}
-                strokeColor={Colors.primary}
-                strokeWidth={3}
-                lineDashPattern={[1]}
-              />
-            )}
-          </>
-        )}
-      </MapView>
+      <MapRenderBoundary>
+        <MapView
+          style={StyleSheet.absoluteFill}
+          region={mapRegion}
+          showsUserLocation
+          showsMyLocationButton={false}
+          customMapStyle={DARK_MAP_STYLE}
+        >
+          {activeOrder && Marker && (
+            <>
+              {restaurantCoordinate && (
+                <Marker
+                  coordinate={restaurantCoordinate}
+                  title={activeOrder.restaurant.name}
+                  pinColor={Colors.primary}
+                />
+              )}
+              {customerCoordinate && (
+                <Marker
+                  coordinate={customerCoordinate}
+                  title={activeOrder.customer.name}
+                  pinColor={Colors.tertiary}
+                />
+              )}
+              {Polyline && location && restaurantCoordinate && customerCoordinate && (
+                <Polyline
+                  coordinates={[location, restaurantCoordinate, customerCoordinate]}
+                  strokeColor={Colors.primary}
+                  strokeWidth={3}
+                  lineDashPattern={[1]}
+                />
+              )}
+            </>
+          )}
+        </MapView>
+      </MapRenderBoundary>
     );
   };
+
+  const restaurantCoordinate = getSafeCoordinate(activeOrder?.restaurant);
+  const customerCoordinate = getSafeCoordinate(activeOrder?.customer);
 
   return (
     <View style={[styles.container, { paddingTop: topPad }]}>
@@ -214,33 +267,33 @@ export default function MapScreen() {
                 <Text style={styles.routeTitle}>Itinéraire actif</Text>
 
                 <TouchableOpacity
-                  style={[styles.routeStep, (activeOrder.restaurant.lat === 0 && activeOrder.restaurant.lng === 0) && styles.routeStepDisabled]}
+                  style={[styles.routeStep, !restaurantCoordinate && styles.routeStepDisabled]}
                   onPress={() => openNavigation(activeOrder.restaurant.lat, activeOrder.restaurant.lng, activeOrder.restaurant.name)}
                   activeOpacity={0.8}
-                  disabled={activeOrder.restaurant.lat === 0 && activeOrder.restaurant.lng === 0}
+                  disabled={!restaurantCoordinate}
                 >
                   <View style={[styles.stepDot, { backgroundColor: Colors.primary }]} />
                   <View style={styles.stepInfo}>
                     <Text style={styles.stepLabel}>Pickup</Text>
                     <Text style={styles.stepAddress} numberOfLines={1}>{activeOrder.restaurant.name}</Text>
                   </View>
-                  <Ionicons name="navigate-outline" size={20} color={activeOrder.restaurant.lat === 0 && activeOrder.restaurant.lng === 0 ? Colors.textMuted : Colors.primary} />
+                  <Ionicons name="navigate-outline" size={20} color={!restaurantCoordinate ? Colors.textMuted : Colors.primary} />
                 </TouchableOpacity>
 
                 <View style={styles.routeLine} />
 
                 <TouchableOpacity
-                  style={[styles.routeStep, (activeOrder.customer.lat === 0 && activeOrder.customer.lng === 0) && styles.routeStepDisabled]}
+                  style={[styles.routeStep, !customerCoordinate && styles.routeStepDisabled]}
                   onPress={() => openNavigation(activeOrder.customer.lat, activeOrder.customer.lng, activeOrder.customer.name)}
                   activeOpacity={0.8}
-                  disabled={activeOrder.customer.lat === 0 && activeOrder.customer.lng === 0}
+                  disabled={!customerCoordinate}
                 >
                   <View style={[styles.stepDot, { backgroundColor: Colors.tertiary }]} />
                   <View style={styles.stepInfo}>
                     <Text style={styles.stepLabel}>Livraison</Text>
                     <Text style={styles.stepAddress} numberOfLines={1}>{activeOrder.customer.address}</Text>
                   </View>
-                  <Ionicons name="navigate-outline" size={20} color={activeOrder.customer.lat === 0 && activeOrder.customer.lng === 0 ? Colors.textMuted : Colors.tertiary} />
+                  <Ionicons name="navigate-outline" size={20} color={!customerCoordinate ? Colors.textMuted : Colors.tertiary} />
                 </TouchableOpacity>
 
                 <TouchableOpacity
