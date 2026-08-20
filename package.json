@@ -30,7 +30,8 @@
     "react-native-maps": "^1.18.0",
     "react-native-reanimated": "^4.5.3",
     "react-native-safe-area-context": "^5.8.0",
-    "react-native-web": "^0.21.2"
+    "react-native-web": "^0.21.2",
+    "vitest": "^4.1.11"
   },
   "devDependencies": {
     "@expo/metro-config": "^57.0.7",
@@ -45,7 +46,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "build:android": "eas build --platform android",
-    "build:android-local": "eas build --platform android --local"
+    "build:android-local": "eas build --platform android --local",
+    "test": "vitest run"
   },
   "private": true,
   "packageManager": "pnpm@10.26.1"

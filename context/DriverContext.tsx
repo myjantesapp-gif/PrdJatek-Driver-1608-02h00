@@ -7,6 +7,14 @@ import { JatekSse, SseEvent } from '@/lib/sse';
 import * as ExpoNotifications from 'expo-notifications';
 import { configureNotifications, notifyNewOrder, addNotificationResponseListener, getLastNotificationResponse } from '@/lib/notifications';
 import { useAuth } from '@/context/AuthContext';
+import {
+  ACTIVE_STATUS_ORDER,
+  isAllowedStatusTransition,
+  mapApiStatus,
+  shouldRetainActiveDelivery,
+  shouldRollbackOptimisticStatus,
+  type DeliveryStatus,
+} from '@/lib/delivery-state';
 
 export type DriverStatus = 'online' | 'offline' | 'busy';
 
@@ -62,7 +70,7 @@ export interface Order {
   estimatedPickup: number;
   estimatedDelivery: number;
   otp: string;
-  status: 'incoming' | 'accepted' | 'at_restaurant' | 'picked_up' | 'delivering' | 'completed' | 'cancelled';
+  status: DeliveryStatus;
   createdAt: string;
   completedAt?: string;
   tip: number;
@@ -71,36 +79,6 @@ export interface Order {
 export interface DeliveryHistory extends Order {
   rating?: number;
   completedAt: string;
-}
-
-// Map API status → app status. Returns null for genuinely unknown statuses so
-// callers can filter them out rather than treating them as new incoming offers.
-function mapApiStatus(apiStatus: string): Order['status'] | null {
-  // The API has returned underscores, hyphens, and spaces for the same status.
-  const s = apiStatus?.trim().toLowerCase().replace(/[\s-]+/g, '_') ?? '';
-  switch (s) {
-    case 'pending':
-    case 'assigned':          return 'incoming';
-    case 'accepted':          return 'accepted';
-    case 'at_restaurant':
-    case 'ready_for_pickup':
-    case 'preparing':
-    case 'ready':             return 'at_restaurant';
-    case 'picked_up':
-    case 'pickedup':
-                                return 'picked_up';
-    case 'en_route':
-    case 'delivering':
-    case 'in_progress':
-    case 'out_for_delivery':
-    case 'on_the_way':
-                                return 'delivering';
-    case 'delivered':
-    case 'completed':         return 'completed';
-    case 'cancelled':
-    case 'canceled':          return 'cancelled';
-    default:                  return null; // unknown — caller must handle
-  }
 }
 
 // Map app status → API status
@@ -116,18 +94,6 @@ function mapAppStatusToApi(appStatus: Order['status']): string {
     case 'cancelled':     return 'cancelled';
     default:              return appStatus;
   }
-}
-
-const ACTIVE_STATUS_ORDER: Order['status'][] = [
-  'accepted',
-  'at_restaurant',
-  'picked_up',
-  'delivering',
-];
-
-function isAllowedStatusTransition(from: Order['status'], to: Order['status']) {
-  const currentIndex = ACTIVE_STATUS_ORDER.indexOf(from);
-  return currentIndex >= 0 && ACTIVE_STATUS_ORDER[currentIndex + 1] === to;
 }
 
 function isValidApiOrderResponse(value: unknown, expectedId: number) {
@@ -756,6 +722,13 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       const confirmedLocalStatus = serverVersionOfLocal
         ? mapApiStatus(serverVersionOfLocal.status)
         : null;
+      const retainLocalDelivery = localActiveOrder
+        ? shouldRetainActiveDelivery({
+            localApiId: localActiveOrder.apiId,
+            activeOrderIds: activeApiOrders.map((order) => order.id),
+            serverStatus: serverVersionOfLocal?.status,
+          })
+        : false;
 
       if (activeApiOrders.length > 0) {
         const matchingLocalOrder = activeApiOrders.find(
@@ -772,7 +745,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         // Another active order does not prove that this driver's local delivery
         // was replaced. Keep the local order until its own server record is
         // terminal; this also keeps an open order-detail route stable.
-        if (localActiveOrder && !matchingLocalOrder && confirmedLocalStatus !== 'completed' && confirmedLocalStatus !== 'cancelled') {
+        if (localActiveOrder && retainLocalDelivery) {
           return;
         }
         const activeApiOrder = matchingLocalOrder ?? activeApiOrders[0];
@@ -800,11 +773,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         // An empty, incomplete, or unfamiliar response is not confirmation that
         // an accepted delivery ended. Keep it visible until the API reports a
         // terminal status or a replacement active order.
-        if (
-          localActiveOrder &&
-          confirmedLocalStatus !== 'completed' &&
-          confirmedLocalStatus !== 'cancelled'
-        ) {
+        if (localActiveOrder && retainLocalDelivery) {
           return;
         }
 
@@ -1187,19 +1156,20 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       // state if no server confirmation has superseded it.
       await pollOrdersRef.current();
       const confirmedStatus = confirmedActiveStatusRef.current;
-      const isConfirmedAtOrBeyondTarget = (
-        confirmedStatus?.orderId === id &&
-        ACTIVE_STATUS_ORDER.indexOf(confirmedStatus.status) >= ACTIVE_STATUS_ORDER.indexOf(newStatus)
-      );
-      const isLatestRequest = (
-        latestStatusUpdateRef.current?.orderId === id &&
-        latestStatusUpdateRef.current.version === requestVersion
-      );
-      if (isLatestRequest && !isConfirmedAtOrBeyondTarget && activeOrderRef.current?.id === id) {
+      const shouldRollback = shouldRollbackOptimisticStatus({
+        orderId: id,
+        requestVersion,
+        latestRequest: latestStatusUpdateRef.current ?? undefined,
+        activeOrderId: activeOrderRef.current?.id,
+        targetStatus: newStatus,
+        confirmedStatus:
+          confirmedStatus?.orderId === id ? confirmedStatus.status : undefined,
+      });
+      if (shouldRollback) {
         activeOrderRef.current = previousOrder;
         setActiveOrder(previousOrder);
       }
-      if (isConfirmedAtOrBeyondTarget) return true;
+      if (!shouldRollback && confirmedStatus?.orderId === id) return true;
       const message = err instanceof ApiError
         ? err.message
         : err instanceof Error

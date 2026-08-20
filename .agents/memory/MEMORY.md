@@ -2,3 +2,4 @@
 - [AsyncStorage web quirks](asyncstorage-web.md) — multiSet/multiGet/multiRemove crash on Expo web; use individual calls
 - [Web stubs for native-only packages](web-stubs.md) — metro.config.js WEB_STUBS map; deployment path quirk with nested node_modules
 - [Orders not arriving — root causes](orders-not-arriving.md) — 3 bugs: busy→online reset, SSE useEffect/pollOrdersRef, 401 infinite loop
+- [Expo web preview startup](expo-web-preview.md) — use offline production-preview mode when DevTools cannot load its Linux shell

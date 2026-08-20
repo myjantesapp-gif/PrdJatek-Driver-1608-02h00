@@ -14,13 +14,7 @@ import * as Location from 'expo-location';
 import { Colors } from '@/constants/colors';
 import { useDriver } from '@/context/DriverContext';
 import { router } from 'expo-router';
-
-const DEFAULT_REGION = {
-  latitude: 48.8566,
-  longitude: 2.3522,
-  latitudeDelta: 0.05,
-  longitudeDelta: 0.05,
-};
+import { DEFAULT_MAP_REGION, getWebLocationFallback } from '@/lib/delivery-state';
 
 function MapPlaceholder({ message }: { message: string }) {
   return (
@@ -97,14 +91,14 @@ export default function MapScreen() {
           // Guard: navigator may be undefined in non-browser web environments
           if (typeof navigator === 'undefined' || !navigator.geolocation) {
             if (!cancelled) {
-              setLocation(DEFAULT_REGION);
+              setLocation(getWebLocationFallback('unavailable'));
               setLoading(false);
             }
             return;
           }
           const fallbackTimer = setTimeout(() => {
             if (!cancelled) {
-              setLocation(DEFAULT_REGION);
+              setLocation(getWebLocationFallback('timeout'));
               setLoading(false);
             }
           }, 12_000);
@@ -119,7 +113,7 @@ export default function MapScreen() {
             () => {
               clearTimeout(fallbackTimer);
               if (!cancelled) {
-                setLocation(DEFAULT_REGION);
+                setLocation(getWebLocationFallback('permission-denied'));
                 setLoading(false);
               }
             },
@@ -144,7 +138,7 @@ export default function MapScreen() {
           setLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
         }
       } catch {
-        if (!cancelled) setLocation(DEFAULT_REGION);
+        if (!cancelled) setLocation(getWebLocationFallback('timeout'));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -176,7 +170,7 @@ export default function MapScreen() {
 
   const mapRegion = location
     ? { ...location, latitudeDelta: 0.02, longitudeDelta: 0.02 }
-    : DEFAULT_REGION;
+    : DEFAULT_MAP_REGION;
 
   const renderMap = () => {
     if (Platform.OS === 'web') {

@@ -17,6 +17,7 @@ import * as Haptics from 'expo-haptics';
 import { Colors } from '@/constants/colors';
 import { useDriver } from '@/context/DriverContext';
 import { OTPInput } from '@/components/OTPInput';
+import { getNextOrderStatusLabel } from '@/lib/delivery-state';
 
 const STEPS = [
   { key: 'accepted', label: 'Commande acceptée', icon: 'checkmark-circle-outline' as const },
@@ -218,16 +219,7 @@ export default function OrderDetailScreen() {
   const totalItems = order.items.reduce((s, i) => s + i.quantity, 0);
   const subtotal = order.items.reduce((s, i) => s + i.price * i.quantity, 0);
 
-  const getNextButtonLabel = () => {
-    switch (order.status) {
-      case 'accepted': return 'Arrivé au restaurant';
-      case 'at_restaurant': return 'Commande récupérée';
-      case 'picked_up': return 'En route vers le client';
-      default: return null;
-    }
-  };
-
-  const nextLabel = getNextButtonLabel();
+  const nextLabel = getNextOrderStatusLabel(order.status);
 
   return (
     <View style={[styles.container, { paddingTop: topPad }]}>
