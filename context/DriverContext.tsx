@@ -331,6 +331,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const statusUpdateVersionRef = useRef(0);
   const latestStatusUpdateRef = useRef<{ orderId: string; version: number } | null>(null);
   const confirmedActiveStatusRef = useRef<{ orderId: string; status: Order['status'] } | null>(null);
+  /** Prevent repeated alerts when an older client or backend creates duplicate active deliveries. */
+  const multipleActiveOrdersAlertedRef = useRef(false);
   /** Prevent duplicate confirm-delivery requests across screens or taps. */
   const isConfirmingDeliveryRef = useRef(false);
   /** Stable ref to latest activeOrder — read inside notification listener without stale closure */
@@ -350,6 +352,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     pendingQueueRef.current = [];
     enrichedOrderCache.current.clear();
     suppressedOfferIds.current.clear();
+    multipleActiveOrdersAlertedRef.current = false;
     driverLocationRef.current = null;
     locationPermissionRef.current = 'unknown';
   }, [driverId]);
@@ -699,6 +702,16 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         );
       });
 
+      if (activeApiOrders.length > 1 && !multipleActiveOrdersAlertedRef.current) {
+        multipleActiveOrdersAlertedRef.current = true;
+        Alert.alert(
+          'Plusieurs livraisons détectées',
+          'Le serveur a associé plusieurs commandes à ce compte. La livraison déjà ouverte reste prioritaire ; contactez le support avant d’en commencer une autre.',
+        );
+      } else if (activeApiOrders.length <= 1) {
+        multipleActiveOrdersAlertedRef.current = false;
+      }
+
       const completedOrders = myOrders.filter((o) => {
         const mapped = mapApiStatus(o.status);
         return mapped === 'completed';
@@ -967,7 +980,14 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   // ── Order actions ────────────────────────────────────────────────────────────
 
   const acceptOrder = useCallback(async () => {
-    if (!incomingOrder || !driverId || statusRef.current !== 'online') return;
+    if (!incomingOrder || !driverId) return;
+    if (activeOrderRef.current || statusRef.current !== 'online') {
+      Alert.alert(
+        'Livraison déjà en cours',
+        'Terminez ou annulez la livraison active avant d’accepter une nouvelle commande.',
+      );
+      return;
+    }
     const orderToAccept = incomingOrder;
     if (acceptingOrderIdRef.current === orderToAccept.apiId) return;
     acceptingOrderIdRef.current = orderToAccept.apiId;

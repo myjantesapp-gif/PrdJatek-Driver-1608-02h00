@@ -61,6 +61,16 @@ description: Three bugs that caused drivers to stop receiving order alerts on th
 
 ---
 
+## Root cause 6 — Backend accepts concurrent deliveries for one driver
+
+**Rule:** `accept-delivery` must enforce “one non-terminal delivery per driver” atomically and return a conflict for any second request.
+
+**Why:** Live testing accepted two additional orders for a driver who already had an `en_route` delivery. The server also left the driver profile available, making more offers possible. Client-side guards improve UX but cannot protect against direct calls or older app versions.
+
+**How to apply:** In the backend transaction, lock/check the driver’s non-terminal deliveries before assignment, set availability false with the first accepted order, and return HTTP 409 with a clear busy-driver message on later attempts.
+
+---
+
 ## Active delivery reconciliation
 
 **Rule:** Treat a locally accepted delivery as active until its own server record explicitly confirms a terminal status. Polling callers must share an in-flight reconciliation, and a failed transition must wait for that reconciliation before rolling back an optimistic state.
