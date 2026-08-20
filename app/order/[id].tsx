@@ -227,7 +227,7 @@ export default function OrderDetailScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.closeBtn}>
           <Ionicons name="close" size={22} color={Colors.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Commande #{order.id.slice(-6).toUpperCase()}</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{order.reference}</Text>
         <View style={styles.earningsBadge}>
           <Text style={styles.earningsText}>{order.earnings.toFixed(2)} €</Text>
         </View>

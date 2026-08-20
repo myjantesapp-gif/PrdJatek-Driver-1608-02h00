@@ -51,6 +51,16 @@ description: Three bugs that caused drivers to stop receiving order alerts on th
 
 ---
 
+## Root cause 5 — Active delivery missing from the order-list endpoint
+
+**Rule:** Never treat an active delivery missing from `GET /api/orders` as proof that it ended; retain local active state until its own order record explicitly reports `delivered`, `completed`, or cancellation.
+
+**Why:** Live API testing showed an order still returned by `GET /api/orders/:id` with `en_route` and the correct driver ID, while `GET /api/orders` returned an empty array for that same driver. Clearing local state from the list response sends the driver to a missing-order screen during a real delivery.
+
+**How to apply:** Reconcile an already-active order against its individual endpoint whenever a list poll omits it, and ensure the backend list endpoint includes every active order assigned to the authenticated driver.
+
+---
+
 ## Active delivery reconciliation
 
 **Rule:** Treat a locally accepted delivery as active until its own server record explicitly confirms a terminal status. Polling callers must share an in-flight reconciliation, and a failed transition must wait for that reconciliation before rolling back an optimistic state.

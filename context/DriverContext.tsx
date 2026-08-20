@@ -50,6 +50,7 @@ export interface OrderItem {
 export interface Order {
   id: string;
   apiId: number;
+  reference: string;
   restaurant: {
     name: string;
     address: string;
@@ -162,6 +163,7 @@ function mapAvailableOrder(order: ApiAvailableOrder): Order {
   return {
     id: String(order.id),
     apiId: order.id,
+    reference: order.reference ?? `Commande #${order.id}`,
     restaurant: {
       name: order.restaurantName ?? 'Restaurant',
       address: '',
@@ -213,6 +215,7 @@ function mapApiOrder(apiOrder: ApiOrder, driverId: number): Order {
   return {
     id: String(apiOrder.id),
     apiId: apiOrder.id,
+    reference: apiOrder.reference ?? `Commande #${apiOrder.id}`,
     restaurant: {
       name: shop?.name ?? apiOrder.restaurantName ?? 'Restaurant',
       address: shop?.address ?? '',
@@ -983,10 +986,14 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         (order) => order.id !== orderToAccept.apiId,
       );
       pendingQueueRef.current = pendingQueueRef.current.filter((id) => id !== orderToAccept.apiId);
-       activeOrderRef.current = mappedAccepted;
+      activeOrderRef.current = mappedAccepted;
       setActiveOrder(mappedAccepted);
-       setTerminalOrder(null);
+      setTerminalOrder(null);
       setStatusState('busy');
+      statusRef.current = 'busy';
+      api.updateDriver(driverId, { isAvailable: false }).catch((updateError) => {
+        console.warn('[DriverContext] failed to persist busy status after accept:', updateError);
+      });
     } catch (err) {
       console.warn('[DriverContext] acceptOrder API call failed:', err);
       activeOrderRef.current = null;

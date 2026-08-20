@@ -21,6 +21,7 @@ export function OrderCard({ order, onPress, compact = false }: OrderCardProps) {
         </View>
         <View style={styles.headerInfo}>
           <Text style={styles.restaurantName} numberOfLines={1}>{order.restaurant.name}</Text>
+          <Text style={styles.reference} numberOfLines={1}>{order.reference}</Text>
           <Text style={styles.restaurantAddress} numberOfLines={1}>{order.restaurant.address}</Text>
         </View>
         <View style={styles.earningsBadge}>
@@ -95,6 +96,12 @@ const styles = StyleSheet.create({
   restaurantAddress: {
     color: Colors.textMuted,
     fontSize: 12,
+  },
+  reference: {
+    color: Colors.textMuted,
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.4,
   },
   earningsBadge: {
     backgroundColor: Colors.successBg,
