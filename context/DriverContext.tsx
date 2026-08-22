@@ -2,7 +2,15 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import { Alert, Platform } from 'react-native';
 import { router } from 'expo-router';
 import * as Location from 'expo-location';
-import { api, ApiDriverProfile, ApiOrder, ApiAvailableOrder, ApiEarnings, ApiError } from '@/lib/api';
+import {
+  api,
+  ApiDriverProfile,
+  ApiOrder,
+  ApiAvailableOrder,
+  ApiEarnings,
+  ApiError,
+  isDriverBusyConflict,
+} from '@/lib/api';
 import { JatekSse, SseEvent } from '@/lib/sse';
 import * as ExpoNotifications from 'expo-notifications';
 import { configureNotifications, notifyNewOrder, addNotificationResponseListener, getLastNotificationResponse } from '@/lib/notifications';
@@ -981,14 +989,21 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
   const acceptOrder = useCallback(async () => {
     if (!incomingOrder || !driverId) return;
-    if (activeOrderRef.current || statusRef.current !== 'online') {
+    const orderToAccept = incomingOrder;
+    const existingActiveOrder = activeOrderRef.current;
+
+    if (existingActiveOrder || statusRef.current === 'busy') {
+      if (incomingTimerRef.current) clearTimeout(incomingTimerRef.current);
+      setIncomingOrder(null);
       Alert.alert(
-        'Livraison déjà en cours',
-        'Terminez ou annulez la livraison active avant d’accepter une nouvelle commande.',
+        'Livreur déjà occupé',
+        'Vous avez déjà une livraison en cours. Terminez-la avant d’en accepter une autre.',
       );
       return;
     }
-    const orderToAccept = incomingOrder;
+
+    if (statusRef.current !== 'online') return;
+
     if (acceptingOrderIdRef.current === orderToAccept.apiId) return;
     acceptingOrderIdRef.current = orderToAccept.apiId;
     if (incomingTimerRef.current) clearTimeout(incomingTimerRef.current);
@@ -1016,9 +1031,20 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       });
     } catch (err) {
       console.warn('[DriverContext] acceptOrder API call failed:', err);
-      activeOrderRef.current = null;
-      setActiveOrder(null);
-      setStatusState('online');
+      const hasActiveDelivery = Boolean(existingActiveOrder || activeOrderRef.current);
+      if (hasActiveDelivery) {
+        if (existingActiveOrder) {
+          activeOrderRef.current = existingActiveOrder;
+          setActiveOrder(existingActiveOrder);
+        }
+        setStatusState('busy');
+        statusRef.current = 'busy';
+      } else {
+        activeOrderRef.current = null;
+        setActiveOrder(null);
+        setStatusState('online');
+        statusRef.current = 'online';
+      }
 
       const status = err instanceof ApiError ? err.status : 0;
       const errorData = err instanceof ApiError && typeof err.data === 'object' && err.data
@@ -1032,13 +1058,24 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       enrichedOrderCache.current.delete(orderToAccept.apiId);
       seenOrderIds.current.delete(orderToAccept.apiId);
 
-      if (status === 409) {
+      if (status === 409 && (isDriverBusyConflict(err) || hasActiveDelivery)) {
+        if (!hasActiveDelivery) {
+          await pollOrdersRef.current();
+        }
+        suppressedOfferIds.current.add(orderToAccept.apiId);
+        Alert.alert(
+          'Livreur déjà occupé',
+          'Vous avez déjà une livraison en cours. Terminez-la avant d’en accepter une autre.',
+        );
+      } else if (status === 409) {
         suppressedOfferIds.current.add(orderToAccept.apiId);
         Alert.alert(
           'Commande non disponible',
           'Désolé, cette commande a déjà été prise par un autre livreur.',
         );
-        advanceQueueRef.current();
+        if (!hasActiveDelivery) {
+          advanceQueueRef.current();
+        }
       } else if (status === 412) {
         setStatusState('offline');
         statusRef.current = 'offline';

@@ -176,6 +176,13 @@ export interface ApiAvailableOrder {
   }>;
 }
 
+export interface AcceptDeliveryConflict {
+  error?: string;
+  message?: string;
+  code?: string;
+  activeOrderId?: number;
+}
+
 // ─── API client ───────────────────────────────────────────────────────────────
 
 class JatekApi {
@@ -321,8 +328,13 @@ class JatekApi {
 
   /**
    * Atomically assigns an available order to this driver.
-   * The backend returns 409 when another driver won the race and 412 when
-   * the driver's mandatory profile is incomplete.
+   *
+   * The backend returns 409 both when another driver won the race and when
+   * this driver already has an active delivery. Callers must inspect the
+   * conflict payload/message so a driver-busy conflict does not replace the
+   * delivery that is already in progress.
+   *
+   * The backend returns 412 when the driver's mandatory profile is incomplete.
    */
   async acceptDelivery(orderId: number, driverId: number): Promise<ApiOrder> {
     return this.request<ApiOrder>(`/api/orders/${orderId}/accept-delivery`, {
@@ -389,6 +401,28 @@ export class ApiError extends Error {
     this.status = status;
     this.data = data;
   }
+}
+
+/**
+ * The accept endpoint uses HTTP 409 for two different, user-visible cases.
+ * Keep this check deliberately narrow: the generic "order already taken"
+ * response means another driver won the race, not that this driver is busy.
+ */
+export function isDriverBusyConflict(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.status !== 409) return false;
+
+  const payload = error.data as AcceptDeliveryConflict | null;
+  const code = typeof payload?.code === 'string' ? payload.code : '';
+  const message = [
+    error.message,
+    typeof payload?.error === 'string' ? payload.error : '',
+    typeof payload?.message === 'string' ? payload.message : '',
+  ].join(' ').toLowerCase();
+
+  return (
+    code.toLowerCase() === 'driver_already_busy' ||
+    /driver.*(already\s+)?(busy|active)|already\s+have\s+(an?\s+)?active\s+deliver|active\s+delivery.*driver|livreur.*(occup|active)/i.test(message)
+  );
 }
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
