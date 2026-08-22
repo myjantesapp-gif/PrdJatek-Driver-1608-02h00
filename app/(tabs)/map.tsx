@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 import * as Location from 'expo-location';
 import { Colors } from '@/constants/colors';
 import { useDriver } from '@/context/DriverContext';
@@ -62,13 +63,19 @@ export default function MapScreen() {
   const [Marker, setMarker] = useState<any>(null);
   const [Polyline, setPolyline] = useState<any>(null);
   const [mapUnavailable, setMapUnavailable] = useState(false);
+  const hasAndroidMapsKey = Boolean(
+    Constants.expoConfig?.android?.config?.googleMaps?.apiKey,
+  );
+  const nativeMapSupported = Platform.OS !== 'android' || hasAndroidMapsKey;
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
 
   useEffect(() => {
     let cancelled = false;
 
-    if (Platform.OS !== 'web') {
+    if (Platform.OS === 'android' && !hasAndroidMapsKey) {
+      setMapUnavailable(true);
+    } else if (Platform.OS !== 'web') {
       (async () => {
         try {
           const maps = await import('react-native-maps');
@@ -145,7 +152,7 @@ export default function MapScreen() {
     })();
 
     return () => { cancelled = true; };
-  }, []);
+  }, [hasAndroidMapsKey]);
 
   const openNavigation = async (lat: number, lng: number, label: string) => {
     if (!hasNavigableCoordinates(lat, lng)) return;
@@ -189,7 +196,13 @@ export default function MapScreen() {
     if (!MapView) {
       return (
         <MapPlaceholder
-          message={mapUnavailable ? 'Carte indisponible sur cet appareil' : 'Chargement de la carte...'}
+          message={
+            mapUnavailable
+              ? nativeMapSupported
+                ? 'Carte indisponible sur cet appareil'
+                : 'Carte Android désactivée : configuration Google Maps manquante'
+              : 'Chargement de la carte...'
+          }
         />
       );
     }
