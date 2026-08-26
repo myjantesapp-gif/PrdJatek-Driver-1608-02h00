@@ -1,5 +1,13 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { api, saveAuth, loadAuth, clearAuth, LoginResponse, ApiError } from '@/lib/api';
+import {
+  api,
+  saveAuth,
+  loadAuth,
+  clearAuth,
+  clearActiveOrderSnapshot,
+  LoginResponse,
+  ApiError,
+} from '@/lib/api';
 
 interface AuthUser {
   userId: number;
@@ -118,10 +126,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    if (user?.driverId) {
+      await clearActiveOrderSnapshot(user.driverId).catch(() => {});
+    }
     await clearAuth();
     api.setToken(null);
     setUser(null);
-  }, []);
+  }, [user]);
 
   return (
     <AuthContext.Provider value={{ user, isLoading, login, logout }}>

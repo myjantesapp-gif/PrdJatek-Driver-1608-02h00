@@ -430,6 +430,7 @@ export function isDriverBusyConflict(error: unknown): boolean {
 export const AUTH_TOKEN_KEY = '@jatek_auth_token';
 export const AUTH_USER_KEY = '@jatek_auth_user';
 export const AUTH_DRIVER_ID_KEY = '@jatek_driver_id';
+export const ACTIVE_ORDER_KEY_PREFIX = '@jatek_active_order_';
 
 export async function saveAuth(token: string, userId: number, driverId: number) {
   await AsyncStorage.setItem(AUTH_TOKEN_KEY, token);
@@ -453,4 +454,28 @@ export async function clearAuth() {
   await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
   await AsyncStorage.removeItem(AUTH_USER_KEY);
   await AsyncStorage.removeItem(AUTH_DRIVER_ID_KEY);
+}
+
+/**
+ * Keep a restart-safe snapshot of the delivery currently owned by the driver.
+ * This intentionally uses individual AsyncStorage calls because Expo web does
+ * not implement the multi-key methods reliably.
+ */
+export async function saveActiveOrderSnapshot(driverId: number, order: unknown) {
+  await AsyncStorage.setItem(`${ACTIVE_ORDER_KEY_PREFIX}${driverId}`, JSON.stringify(order));
+}
+
+export async function loadActiveOrderSnapshot<T>(driverId: number): Promise<T | null> {
+  const raw = await AsyncStorage.getItem(`${ACTIVE_ORDER_KEY_PREFIX}${driverId}`);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    await clearActiveOrderSnapshot(driverId);
+    return null;
+  }
+}
+
+export async function clearActiveOrderSnapshot(driverId: number) {
+  await AsyncStorage.removeItem(`${ACTIVE_ORDER_KEY_PREFIX}${driverId}`);
 }

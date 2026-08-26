@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
-import { Alert, Platform } from 'react-native';
+import { Alert, AppState, Platform } from 'react-native';
 import { router } from 'expo-router';
 import * as Location from 'expo-location';
 import {
@@ -10,6 +10,9 @@ import {
   ApiEarnings,
   ApiError,
   isDriverBusyConflict,
+  saveActiveOrderSnapshot,
+  loadActiveOrderSnapshot,
+  clearActiveOrderSnapshot,
 } from '@/lib/api';
 import { JatekSse, SseEvent } from '@/lib/sse';
 import * as ExpoNotifications from 'expo-notifications';
@@ -315,6 +318,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null);
   const statusRef = useRef<DriverStatus>(status);
+  const activeOrderHydratedRef = useRef(false);
+  const profileAvailabilityRef = useRef<boolean | null>(null);
 
   const seenOrderIds = useRef<Set<number>>(new Set());
   const pendingQueueRef = useRef<number[]>([]); // IDs of pending orders not yet shown
@@ -345,6 +350,50 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const isConfirmingDeliveryRef = useRef(false);
   /** Stable ref to latest activeOrder — read inside notification listener without stale closure */
   const activeOrderRef = useRef<Order | null>(null);
+  /**
+   * Storage writes must be serialized. Otherwise an older transition snapshot
+   * can finish after a terminal clear and resurrect a completed delivery.
+   */
+  const activeSnapshotWriteRef = useRef<Promise<void>>(Promise.resolve());
+
+  const queueActiveSnapshotWrite = useCallback(
+    (write: () => Promise<void>, label: string) => {
+      const nextWrite = activeSnapshotWriteRef.current
+        .catch(() => {})
+        .then(write)
+        .catch((err) => {
+          console.warn(`[DriverContext] ${label} failed:`, err);
+        });
+      activeSnapshotWriteRef.current = nextWrite;
+      return nextWrite;
+    },
+    [],
+  );
+
+  const persistActiveOrderSnapshot = useCallback(
+    (order: Order) => {
+      if (!driverId) return;
+      queueActiveSnapshotWrite(
+        () => {
+          const current = activeOrderRef.current;
+          const currentIndex = current ? ACTIVE_STATUS_ORDER.indexOf(current.status) : -1;
+          const orderIndex = ACTIVE_STATUS_ORDER.indexOf(order.status);
+          // Ignore a stale poll/status response that completed after a newer
+          // transition or after the delivery was cleared.
+          if (
+            !current ||
+            current.apiId !== order.apiId ||
+            currentIndex > orderIndex
+          ) {
+            return Promise.resolve();
+          }
+          return saveActiveOrderSnapshot(driverId, order);
+        },
+        'active order snapshot persistence',
+      );
+    },
+    [driverId, queueActiveSnapshotWrite],
+  );
 
   useEffect(() => {
     statusRef.current = status;
@@ -356,6 +405,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
   // Reset seen-order tracking whenever the driver identity changes (login/logout)
   useEffect(() => {
+    let cancelled = false;
+    activeOrderHydratedRef.current = false;
     seenOrderIds.current.clear();
     pendingQueueRef.current = [];
     enrichedOrderCache.current.clear();
@@ -363,7 +414,63 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     multipleActiveOrdersAlertedRef.current = false;
     driverLocationRef.current = null;
     locationPermissionRef.current = 'unknown';
-  }, [driverId]);
+    confirmedActiveStatusRef.current = null;
+    latestStatusUpdateRef.current = null;
+    acceptingOrderIdRef.current = null;
+    profileAvailabilityRef.current = null;
+
+    activeOrderRef.current = null;
+    setActiveOrder(null);
+    setTerminalOrder(null);
+    if (!driverId) {
+      statusRef.current = 'offline';
+      setStatusState('offline');
+      return () => { cancelled = true; };
+    }
+
+    loadActiveOrderSnapshot<Order>(driverId).then((savedOrder) => {
+      if (cancelled) return;
+      const isValidSnapshot = Boolean(
+        savedOrder &&
+        Number.isInteger(savedOrder.apiId) &&
+        savedOrder.apiId > 0 &&
+        savedOrder.id === String(savedOrder.apiId) &&
+        savedOrder.status &&
+        savedOrder.status !== 'incoming' &&
+        savedOrder.status !== 'completed' &&
+        savedOrder.status !== 'cancelled',
+      );
+      if (isValidSnapshot && savedOrder) {
+        activeOrderRef.current = savedOrder;
+        confirmedActiveStatusRef.current = {
+          orderId: savedOrder.id,
+          status: savedOrder.status,
+        };
+        setActiveOrder(savedOrder);
+        statusRef.current = 'busy';
+        setStatusState('busy');
+      } else if (savedOrder) {
+        queueActiveSnapshotWrite(
+          () => clearActiveOrderSnapshot(driverId),
+          'failed to clear invalid active order snapshot',
+        );
+      }
+      if (!activeOrderRef.current && profileAvailabilityRef.current !== null) {
+        const nextStatus = profileAvailabilityRef.current ? 'online' : 'offline';
+        statusRef.current = nextStatus;
+        setStatusState(nextStatus);
+      }
+      activeOrderHydratedRef.current = true;
+      pollOrdersRef.current();
+    }).catch((err) => {
+      if (cancelled) return;
+      console.warn('[DriverContext] active order restore failed:', err);
+      activeOrderHydratedRef.current = true;
+      pollOrdersRef.current();
+    });
+
+    return () => { cancelled = true; };
+  }, [driverId, queueActiveSnapshotWrite]);
 
   // ── Load driver profile & earnings ──────────────────────────────────────────
 
@@ -379,7 +486,18 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         vehiclePlate: d.vehiclePlate,
         photo: d.photoUrl ?? undefined,
       });
-      setStatusState(d.isAvailable ? 'online' : 'offline');
+      profileAvailabilityRef.current = d.isAvailable;
+      // Profile availability is not authoritative while a delivery is active.
+      // The backend may briefly report the driver as available while the
+      // assigned-order list is catching up.
+      if (activeOrderRef.current) {
+        statusRef.current = 'busy';
+        setStatusState('busy');
+      } else if (activeOrderHydratedRef.current) {
+        const nextStatus = d.isAvailable ? 'online' : 'offline';
+        statusRef.current = nextStatus;
+        setStatusState(nextStatus);
+      }
       setIsApiConnected(true);
     } catch (err) {
       console.warn('[DriverContext] loadProfile failed:', err);
@@ -452,6 +570,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const statusVersionRef = useRef(0);
 
   const setStatus = useCallback(async (s: DriverStatus) => {
+    if (activeOrderRef.current && s !== 'busy') {
+      statusRef.current = 'busy';
+      setStatusState('busy');
+      return;
+    }
     const version = ++statusVersionRef.current;
     const prev = statusRef.current;
     setStatusState(s);
@@ -664,36 +787,75 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     const poll = (async () => {
       try {
       const currentStatus = statusRef.current;
-      const isOnline = currentStatus === 'online';
-      const [assignedResult, availableResult] = await Promise.allSettled([
+      const localActiveOrder = activeOrderRef.current;
+      const isOnline = currentStatus === 'online' && !localActiveOrder;
+      const [assignedResult, availableResult, detailResult] = await Promise.allSettled([
         api.getOrders(),
         isOnline ? api.getAvailableOrders() : Promise.resolve([] as ApiAvailableOrder[]),
+        localActiveOrder
+          ? api.getOrder(localActiveOrder.apiId)
+          : Promise.resolve(null as ApiOrder | null),
       ]);
 
-      const assigned: ApiOrder[] = (
+      const assignedRequestSucceeded = (
         assignedResult.status === 'fulfilled' && Array.isArray(assignedResult.value)
-      )
+      );
+      const assigned: ApiOrder[] = assignedRequestSucceeded
         ? assignedResult.value
-        : lastOrdersRef.current;
-      const available: ApiAvailableOrder[] = (
+        : [];
+      const availableRequestSucceeded = (
         availableResult.status === 'fulfilled' && Array.isArray(availableResult.value)
-      )
+      );
+      const available: ApiAvailableOrder[] = availableRequestSucceeded
         ? availableResult.value
-        : lastAvailableOrdersRef.current;
+        : [];
+      const detailedLocalOrder: ApiOrder | undefined = (
+        localActiveOrder &&
+        detailResult.status === 'fulfilled' &&
+        detailResult.value &&
+        isValidApiOrderResponse(detailResult.value, localActiveOrder.apiId)
+      )
+        ? detailResult.value
+        : undefined;
+      if (!assignedRequestSucceeded && !detailedLocalOrder) {
+        // A failed list/detail request is not evidence that a delivery ended.
+        // Keep the current UI and retry on the next poll without changing
+        // availability or clearing incoming offers.
+        setIsApiConnected(false);
+        if (localActiveOrder) {
+          statusRef.current = 'busy';
+          setStatusState('busy');
+        }
+        return;
+      }
+      // The list endpoint can omit an active delivery. Merge a valid detail
+      // response into this poll's view without pretending the list itself is
+      // complete.
+      const ordersForSync = detailedLocalOrder
+        ? [
+            detailedLocalOrder,
+            ...assigned.filter((order) => order.id !== detailedLocalOrder.id),
+          ]
+        : assigned;
 
       setLastSyncAt(new Date());
       setIsApiConnected(true);
 
       lastOrdersRef.current = assigned;
-      lastAvailableOrdersRef.current = available;
+      if (availableRequestSucceeded) {
+        lastAvailableOrdersRef.current = available;
+      }
 
       const visibleAvailableIds = new Set(available.map((order) => order.id));
       suppressedOfferIds.current.forEach((id) => {
         if (!visibleAvailableIds.has(id)) suppressedOfferIds.current.delete(id);
       });
 
-      const myOrders = assigned.filter(
-        (o) => o.driverId === driverId || o.assignedDriverId === driverId,
+      const myOrders = ordersForSync.filter(
+        (o) =>
+          o.id === localActiveOrder?.apiId ||
+          o.driverId === driverId ||
+          o.assignedDriverId === driverId,
       );
 
       // ── Active in-progress orders ──────────────────────────────────────────
@@ -739,7 +901,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         });
       }
 
-      const localActiveOrder = activeOrderRef.current;
       const serverVersionOfLocal = localActiveOrder
         ? myOrders.find((order) => order.id === localActiveOrder.apiId)
         : undefined;
@@ -770,6 +931,13 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         // was replaced. Keep the local order until its own server record is
         // terminal; this also keeps an open order-detail route stable.
         if (localActiveOrder && retainLocalDelivery) {
+          statusRef.current = 'busy';
+          setStatusState('busy');
+          if (incomingTimerRef.current) {
+            clearTimeout(incomingTimerRef.current);
+            incomingTimerRef.current = null;
+          }
+          setIncomingOrder(null);
           return;
         }
         const activeApiOrder = matchingLocalOrder ?? activeApiOrders[0];
@@ -788,9 +956,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         }
         activeOrderRef.current = nextActiveOrder;
         setActiveOrder(nextActiveOrder);
+        persistActiveOrderSnapshot(nextActiveOrder);
         setTerminalOrder((current) => (
           current?.apiId === nextActiveOrder.apiId ? null : current
         ));
+        statusRef.current = 'busy';
         setStatusState('busy');
         setIncomingOrder(null);
       } else {
@@ -798,6 +968,13 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         // an accepted delivery ended. Keep it visible until the API reports a
         // terminal status or a replacement active order.
         if (localActiveOrder && retainLocalDelivery) {
+          statusRef.current = 'busy';
+          setStatusState('busy');
+          if (incomingTimerRef.current) {
+            clearTimeout(incomingTimerRef.current);
+            incomingTimerRef.current = null;
+          }
+          setIncomingOrder(null);
           return;
         }
 
@@ -812,6 +989,10 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           setStatusState('online');
           statusRef.current = 'online';
           setActiveOrder(null);
+          queueActiveSnapshotWrite(
+            () => clearActiveOrderSnapshot(driverId),
+            'failed to clear completed order snapshot',
+          );
           // Persist online status to backend (fire-and-forget)
           api.updateDriver(driverId, { isAvailable: true }).catch((err) => {
             console.warn('[DriverContext] failed to persist online reset:', err);
@@ -893,19 +1074,40 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     })();
     pollInFlightRef.current = poll;
     return poll;
-  }, [driverId, popNextFromQueue, showOrderAlert]);
+  }, [driverId, popNextFromQueue, showOrderAlert, persistActiveOrderSnapshot, queueActiveSnapshotWrite]);
 
   // ── SSE + fallback polling ───────────────────────────────────────────────────
 
   const getSsePayload = (event: SseEvent): Record<string, any> | null => {
-    if (!event.data || typeof event.data !== 'object') return null;
-    return event.data as Record<string, any>;
+    if (!event.data) return null;
+    if (typeof event.data === 'object') return event.data as Record<string, any>;
+    if (typeof event.data !== 'string') return null;
+    try {
+      const parsed = JSON.parse(event.data);
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const getSseNestedPayload = (payload: Record<string, any>): Record<string, any> => {
+    const nested = payload.order ?? payload.data;
+    if (nested && typeof nested === 'object') return nested;
+    if (typeof nested === 'string') {
+      try {
+        const parsed = JSON.parse(nested);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+      } catch {
+        return {};
+      }
+    }
+    return {};
   };
 
   const getSseOrderId = (event: SseEvent): number | null => {
     const payload = getSsePayload(event);
     if (!payload) return null;
-    const nested = (payload.order ?? payload.data ?? {}) as Record<string, any>;
+    const nested = getSseNestedPayload(payload);
     const value = payload.orderId ?? nested.orderId ?? nested.id;
     const id = Number(value);
     return Number.isFinite(id) && id > 0 ? id : null;
@@ -944,7 +1146,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
       if (!orderId) return;
       const payload = getSsePayload(event);
-      const nested = (payload?.order ?? payload?.data ?? {}) as Record<string, any>;
+      const nested = payload ? getSseNestedPayload(payload) : {};
       const assignedDriverId = Number(payload?.driverId ?? nested.driverId);
       const isMine = assignedDriverId === driverId;
       const isOfferRemoval = /assigned|accepted|taken|removed|unavailable|status/i.test(event.type);
@@ -967,6 +1169,15 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       pollOrdersRef.current();
     });
 
+    // Android may pause timers while the app is backgrounded. Reconcile
+    // immediately when it becomes active again instead of waiting for the
+    // fallback interval to fire.
+    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        pollOrdersRef.current();
+      }
+    });
+
     const stopSse = sse.start();
 
     // Initial sync
@@ -979,6 +1190,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       unsubStatus();
       unsubAuth();
       unsubEvent();
+      appStateSubscription.remove();
       stopSse();
       setIsSocketConnected(false);
     };
@@ -1016,6 +1228,12 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Réponse invalide du serveur lors de l\'acceptation.');
       }
       const mappedAccepted = mapApiOrder(accepted, driverId);
+      if (
+        mappedAccepted.apiId !== orderToAccept.apiId ||
+        !ACTIVE_STATUS_ORDER.includes(mappedAccepted.status)
+      ) {
+        throw new Error('Le serveur n’a pas confirmé l’acceptation de cette commande.');
+      }
       enrichedOrderCache.current.delete(orderToAccept.apiId);
       lastAvailableOrdersRef.current = lastAvailableOrdersRef.current.filter(
         (order) => order.id !== orderToAccept.apiId,
@@ -1026,6 +1244,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       setTerminalOrder(null);
       setStatusState('busy');
       statusRef.current = 'busy';
+      persistActiveOrderSnapshot(mappedAccepted);
       api.updateDriver(driverId, { isAvailable: false }).catch((updateError) => {
         console.warn('[DriverContext] failed to persist busy status after accept:', updateError);
       });
@@ -1097,7 +1316,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     } finally {
       acceptingOrderIdRef.current = null;
     }
-  }, [incomingOrder, driverId]);
+  }, [incomingOrder, driverId, persistActiveOrderSnapshot]);
 
   const declineOrder = useCallback(() => {
     if (incomingTimerRef.current) clearTimeout(incomingTimerRef.current);
@@ -1189,6 +1408,10 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           setTerminalOrder(confirmedOrder);
           setStatusState('online');
           statusRef.current = 'online';
+          queueActiveSnapshotWrite(
+            () => clearActiveOrderSnapshot(driverId),
+            'failed to clear terminal order snapshot',
+          );
           api.updateDriver(driverId, { isAvailable: true }).catch((updateError) => {
             console.warn('[DriverContext] failed to persist online after terminal status:', updateError);
           });
@@ -1205,6 +1428,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         confirmedActiveStatusRef.current = { orderId: id, status: mappedUpdated.status };
         activeOrderRef.current = confirmedOrder;
         setActiveOrder(confirmedOrder);
+        persistActiveOrderSnapshot(confirmedOrder);
       }
       if (!responseConfirmsTransition) {
         Alert.alert(
@@ -1232,6 +1456,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       if (shouldRollback) {
         activeOrderRef.current = previousOrder;
         setActiveOrder(previousOrder);
+        persistActiveOrderSnapshot(previousOrder);
       }
       if (!shouldRollback && confirmedStatus?.orderId === id) return true;
       const message = err instanceof ApiError
@@ -1244,7 +1469,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     } finally {
       isUpdatingStatusRef.current = false;
     }
-  }, [driverId]);
+  }, [driverId, persistActiveOrderSnapshot]);
 
   const validateOTP = useCallback(async (id: string, code: string): Promise<boolean> => {
     const currentOrder = activeOrderRef.current;
@@ -1269,7 +1494,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         rating: 5,
       };
 
-      setHistory((prev) => [completed, ...prev]);
+      setHistory((prev) => (
+        prev.some((entry) => entry.id === completed.id) ? prev : [completed, ...prev]
+      ));
       setTerminalOrder(completed);
       activeOrderRef.current = null;
       setActiveOrder((prev) => (
@@ -1277,6 +1504,10 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       ));
       setStatusState('online');
       statusRef.current = 'online';
+      await queueActiveSnapshotWrite(
+        () => clearActiveOrderSnapshot(driverId),
+        'failed to clear completed order snapshot',
+      );
 
       // Persist online status to backend so driver can receive new orders
       api.updateDriver(driverId, { isAvailable: true }).catch((err) => {
@@ -1321,7 +1552,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     } finally {
       isConfirmingDeliveryRef.current = false;
     }
-  }, [driverId]);
+  }, [driverId, queueActiveSnapshotWrite]);
 
   const refreshEarnings = useCallback(() => {
     if (!driverId) return;
