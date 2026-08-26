@@ -143,6 +143,17 @@ export interface ApiLocationResponse {
   activeOrderIds: number[];
 }
 
+export interface PushTokenResponse {
+  ok: boolean;
+}
+
+type JsonObject = { [key: string]: JsonValue };
+type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
  * Simplified order shape returned by GET /api/orders/available.
  * Fields differ from ApiOrder — notably items use menuItemName/unitPrice.
@@ -232,7 +243,7 @@ class JatekApi {
     }
 
     const text = await res.text();
-    let data: any;
+    let data: unknown;
     try {
       data = JSON.parse(text);
     } catch {
@@ -240,7 +251,15 @@ class JatekApi {
     }
 
     if (!res.ok) {
-      const message = data?.error || data?.message || `HTTP ${res.status}`;
+      const message = isJsonObject(data)
+        ? (
+          typeof data.error === 'string'
+            ? data.error
+            : typeof data.message === 'string'
+              ? data.message
+              : `HTTP ${res.status}`
+        )
+        : `HTTP ${res.status}`;
       throw new ApiError(message, res.status, data);
     }
 
@@ -312,6 +331,17 @@ class JatekApi {
 
   async getEarnings(id: number): Promise<ApiEarnings> {
     return this.request<ApiEarnings>(`/api/drivers/${id}/earnings`);
+  }
+
+  async registerPushToken(pushToken: string): Promise<PushTokenResponse> {
+    const normalizedToken = pushToken.trim();
+    if (!normalizedToken) {
+      throw new Error('Le token de notification est vide.');
+    }
+    return this.request<PushTokenResponse>('/api/drivers/me/push-token', {
+      method: 'PATCH',
+      body: JSON.stringify({ pushToken: normalizedToken }),
+    });
   }
 
   // ── Orders ────────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getNextDeliveryStatus,
   getNextOrderStatusLabel,
   getWebLocationFallback,
   mapApiStatus,
@@ -114,9 +115,16 @@ describe('order detail terminal controls', () => {
   );
 
   it('keeps the expected action labels for active states', () => {
-    expect(getNextOrderStatusLabel('accepted')).toBe('Arrivé au restaurant');
+    expect(getNextOrderStatusLabel('accepted')).toBe('Confirmer la récupération');
     expect(getNextOrderStatusLabel('at_restaurant')).toBe('Commande récupérée');
     expect(getNextOrderStatusLabel('picked_up')).toBe('En route vers le client');
+  });
+
+  it('follows the documented driver status sequence', () => {
+    expect(getNextDeliveryStatus('accepted')).toBe('picked_up');
+    expect(getNextDeliveryStatus('at_restaurant')).toBe('picked_up');
+    expect(getNextDeliveryStatus('picked_up')).toBe('delivering');
+    expect(getNextDeliveryStatus('delivering')).toBe(null);
   });
 });
 

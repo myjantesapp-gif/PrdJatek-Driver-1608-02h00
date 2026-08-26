@@ -49,8 +49,18 @@ export function mapApiStatus(apiStatus: string): DeliveryStatus | null {
 }
 
 export function isAllowedStatusTransition(from: DeliveryStatus, to: DeliveryStatus) {
-  const currentIndex = ACTIVE_STATUS_ORDER.indexOf(from);
-  return currentIndex >= 0 && ACTIVE_STATUS_ORDER[currentIndex + 1] === to;
+  switch (from) {
+    case 'accepted':
+      // The documented driver flow may skip the informational
+      // "at_restaurant" state and confirm pickup directly.
+      return to === 'picked_up' || to === 'at_restaurant';
+    case 'at_restaurant':
+      return to === 'picked_up';
+    case 'picked_up':
+      return to === 'delivering';
+    default:
+      return false;
+  }
 }
 
 /**
@@ -104,10 +114,23 @@ export function shouldRollbackOptimisticStatus({
   return Boolean(isLatestRequest && activeOrderId === orderId && !confirmedAtOrBeyondTarget);
 }
 
+export function getNextDeliveryStatus(status: DeliveryStatus): DeliveryStatus | null {
+  switch (status) {
+    case 'accepted':
+      return 'picked_up';
+    case 'at_restaurant':
+      return 'picked_up';
+    case 'picked_up':
+      return 'delivering';
+    default:
+      return null;
+  }
+}
+
 export function getNextOrderStatusLabel(status: DeliveryStatus): string | null {
   switch (status) {
     case 'accepted':
-      return 'Arrivé au restaurant';
+      return 'Confirmer la récupération';
     case 'at_restaurant':
       return 'Commande récupérée';
     case 'picked_up':

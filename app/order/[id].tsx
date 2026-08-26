@@ -17,7 +17,7 @@ import * as Haptics from 'expo-haptics';
 import { Colors } from '@/constants/colors';
 import { useDriver } from '@/context/DriverContext';
 import { OTPInput } from '@/components/OTPInput';
-import { getNextOrderStatusLabel } from '@/lib/delivery-state';
+import { getNextDeliveryStatus, getNextOrderStatusLabel } from '@/lib/delivery-state';
 
 const STEPS = [
   { key: 'accepted', label: 'Commande acceptée', icon: 'checkmark-circle-outline' as const },
@@ -127,14 +127,8 @@ export default function OrderDetailScreen() {
     if (advancing) return;
     setAdvancing(true);
     try {
-      const currentIdx = STEPS.findIndex((s) => s.key === order.status);
-      if (order.status === 'picked_up') {
-        const updated = await updateOrderStatus(order.id, 'delivering');
-        if (updated && Platform.OS !== 'web') {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        }
-      } else if (currentIdx >= 0 && currentIdx < STEPS.length - 2) {
-        const nextStatus = STEPS[currentIdx + 1].key as any;
+      const nextStatus = getNextDeliveryStatus(order.status);
+      if (nextStatus) {
         const updated = await updateOrderStatus(order.id, nextStatus);
         if (updated && Platform.OS !== 'web') {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);

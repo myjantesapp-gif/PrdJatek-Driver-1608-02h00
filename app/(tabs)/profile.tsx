@@ -16,7 +16,7 @@ import { useAuth } from '@/context/AuthContext';
 import { router } from 'expo-router';
 
 function ProfileRow({ icon, label, value, color, onPress }: {
-  icon: any;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
   label: string;
   value?: string;
   color?: string;
@@ -53,7 +53,15 @@ const LEVEL_COLORS: Record<string, string> = {
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
-  const { profile, stats, earnings, isApiConnected, isSocketConnected, lastSyncAt } = useDriver();
+  const {
+    profile,
+    stats,
+    earnings,
+    isApiConnected,
+    isSocketConnected,
+    lastSyncAt,
+    pushNotificationStatus,
+  } = useDriver();
   const { logout } = useAuth();
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : 0;
@@ -204,6 +212,31 @@ export default function ProfileScreen() {
           <View style={[styles.apiDot, { backgroundColor: isSocketConnected ? Colors.success : Colors.warning ?? '#F59E0B' }]} />
           <Text style={styles.apiStatusText}>
              {isSocketConnected ? 'Commandes en temps réel (SSE)' : 'Temps réel en attente de connexion…'}
+          </Text>
+        </View>
+        <View style={[styles.apiStatus, { marginTop: 4 }]}>
+          <View
+            style={[
+              styles.apiDot,
+              {
+                backgroundColor: pushNotificationStatus === 'enabled'
+                  ? Colors.success
+                  : pushNotificationStatus === 'sync-error'
+                    ? Colors.error
+                    : Colors.warning ?? '#F59E0B',
+              },
+            ]}
+          />
+          <Text style={styles.apiStatusText}>
+            {pushNotificationStatus === 'enabled'
+              ? 'Notifications push activées'
+              : pushNotificationStatus === 'permission-denied'
+                ? 'Notifications push désactivées'
+                : pushNotificationStatus === 'sync-error'
+                  ? 'Token push non synchronisé'
+                  : pushNotificationStatus === 'unavailable'
+                    ? 'Notifications push indisponibles'
+                    : 'Notifications push en préparation…'}
           </Text>
         </View>
 

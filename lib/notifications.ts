@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 
 let configured = false;
 
@@ -34,6 +35,30 @@ export async function configureNotifications(): Promise<boolean> {
     status = requested.status;
   }
   return status === 'granted';
+}
+
+/**
+ * Gets the Expo push token only after permission has been granted.
+ * Native simulators and builds without a configured EAS project can reject
+ * this call, so callers receive null and can keep the delivery flow usable.
+ */
+export async function getExpoPushToken(): Promise<string | null> {
+  if (Platform.OS === 'web') return null;
+
+  const projectId =
+    Constants.expoConfig?.extra?.eas?.projectId ??
+    Constants.easConfig?.projectId;
+
+  try {
+    const token = await Notifications.getExpoPushTokenAsync(
+      projectId ? { projectId } : {},
+    );
+    const value = token.data.trim();
+    return value || null;
+  } catch (error) {
+    console.warn('[Notifications] Expo push token unavailable:', error);
+    return null;
+  }
 }
 
 export async function notifyNewOrder(order: {

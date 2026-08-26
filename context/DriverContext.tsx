@@ -16,7 +16,13 @@ import {
 } from '@/lib/api';
 import { JatekSse, SseEvent } from '@/lib/sse';
 import * as ExpoNotifications from 'expo-notifications';
-import { configureNotifications, notifyNewOrder, addNotificationResponseListener, getLastNotificationResponse } from '@/lib/notifications';
+import {
+  configureNotifications,
+  getExpoPushToken,
+  notifyNewOrder,
+  addNotificationResponseListener,
+  getLastNotificationResponse,
+} from '@/lib/notifications';
 import { useAuth } from '@/context/AuthContext';
 import {
   ACTIVE_STATUS_ORDER,
@@ -28,6 +34,18 @@ import {
 } from '@/lib/delivery-state';
 
 export type DriverStatus = 'online' | 'offline' | 'busy';
+export type PushNotificationStatus =
+  | 'unknown'
+  | 'enabled'
+  | 'permission-denied'
+  | 'unavailable'
+  | 'sync-error';
+
+type UnknownRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 export interface DriverEarnings {
   today: number;
@@ -230,16 +248,16 @@ function mapApiOrder(apiOrder: ApiOrder, driverId: number): Order {
     restaurant: {
       name: shop?.name ?? apiOrder.restaurantName ?? 'Restaurant',
       address: shop?.address ?? '',
-      phone: (shop as any)?.phone ?? '',
-      lat: (shop as any)?.latitude ?? (shop as any)?.lat ?? 0,
-      lng: (shop as any)?.longitude ?? (shop as any)?.lng ?? 0,
+      phone: shop?.phone ?? '',
+      lat: shop?.latitude ?? shop?.lat ?? 0,
+      lng: shop?.longitude ?? shop?.lng ?? 0,
     },
     customer: {
       name: customer?.name ?? apiOrder.userName ?? 'Client',
-      address: apiOrder.deliveryAddress ?? (customer as any)?.address ?? '',
-      phone: (customer as any)?.phone ?? '',
-      lat: apiOrder.deliveryLatitude ?? (customer as any)?.latitude ?? (customer as any)?.lat ?? 0,
-      lng: apiOrder.deliveryLongitude ?? (customer as any)?.longitude ?? (customer as any)?.lng ?? 0,
+      address: apiOrder.deliveryAddress ?? customer?.address ?? '',
+      phone: customer?.phone ?? '',
+      lat: apiOrder.deliveryLatitude ?? apiOrder.customer?.latitude ?? apiOrder.customer?.lat ?? 0,
+      lng: apiOrder.deliveryLongitude ?? apiOrder.customer?.longitude ?? apiOrder.customer?.lng ?? 0,
     },
     items,
     earnings,
@@ -272,6 +290,7 @@ interface DriverContextType {
   isApiConnected: boolean;
   isSocketConnected: boolean;
   lastSyncAt: Date | null;
+  pushNotificationStatus: PushNotificationStatus;
   refreshEarnings: () => void;
   refreshProfile: () => Promise<void>;
 }
@@ -317,6 +336,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const [isApiConnected, setIsApiConnected] = useState(false);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null);
+  const [pushNotificationStatus, setPushNotificationStatus] =
+    useState<PushNotificationStatus>('unknown');
   const statusRef = useRef<DriverStatus>(status);
   const activeOrderHydratedRef = useRef(false);
   const profileAvailabilityRef = useRef<boolean | null>(null);
@@ -508,8 +529,39 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!driverId) return;
 
-    // Ask for push permission; web is a no-op
-    configureNotifications().catch(() => {});
+    const setupPushNotifications = async () => {
+      if (Platform.OS === 'web') {
+        setPushNotificationStatus('unavailable');
+        return;
+      }
+
+      try {
+        const enabled = await configureNotifications();
+        if (!enabled) {
+          setPushNotificationStatus('permission-denied');
+          return;
+        }
+
+        const pushToken = await getExpoPushToken();
+        if (!pushToken) {
+          setPushNotificationStatus('unavailable');
+          return;
+        }
+
+        try {
+          await api.registerPushToken(pushToken);
+          setPushNotificationStatus('enabled');
+        } catch (error) {
+          console.warn('[DriverContext] push token registration failed:', error);
+          setPushNotificationStatus('sync-error');
+        }
+      } catch (error) {
+        console.warn('[DriverContext] notification setup failed:', error);
+        setPushNotificationStatus('unavailable');
+      }
+    };
+
+    void setupPushNotifications();
 
     const loadEarnings = async () => {
       try {
@@ -546,11 +598,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
       if (orderId && activeOrderRef.current?.id === orderId) {
         // The notification is for an order the driver already accepted — open detail
-        router.push(`/order/${orderId}` as any);
+        router.push({ pathname: '/order/[id]', params: { id: orderId } });
       } else {
         // For incoming offers (not yet accepted) the LiveOrderAlert is shown on
         // the tabs screen — navigate there so the driver can act on it.
-        router.push('/(tabs)' as any);
+        router.push('/(tabs)');
       }
     };
 
@@ -1078,25 +1130,25 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
   // ── SSE + fallback polling ───────────────────────────────────────────────────
 
-  const getSsePayload = (event: SseEvent): Record<string, any> | null => {
+  const getSsePayload = (event: SseEvent): UnknownRecord | null => {
     if (!event.data) return null;
-    if (typeof event.data === 'object') return event.data as Record<string, any>;
+    if (isRecord(event.data)) return event.data;
     if (typeof event.data !== 'string') return null;
     try {
       const parsed = JSON.parse(event.data);
-      return parsed && typeof parsed === 'object' ? parsed : null;
+      return isRecord(parsed) ? parsed : null;
     } catch {
       return null;
     }
   };
 
-  const getSseNestedPayload = (payload: Record<string, any>): Record<string, any> => {
+  const getSseNestedPayload = (payload: UnknownRecord): UnknownRecord => {
     const nested = payload.order ?? payload.data;
-    if (nested && typeof nested === 'object') return nested;
+    if (isRecord(nested)) return nested;
     if (typeof nested === 'string') {
       try {
         const parsed = JSON.parse(nested);
-        return parsed && typeof parsed === 'object' ? parsed : {};
+        return isRecord(parsed) ? parsed : {};
       } catch {
         return {};
       }
@@ -1266,8 +1318,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       }
 
       const status = err instanceof ApiError ? err.status : 0;
-      const errorData = err instanceof ApiError && typeof err.data === 'object' && err.data
-        ? err.data as Record<string, any>
+      const errorData = err instanceof ApiError && isRecord(err.data)
+        ? err.data
         : null;
 
       lastAvailableOrdersRef.current = lastAvailableOrdersRef.current.filter(
@@ -1307,7 +1359,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       } else {
         Alert.alert(
           'Erreur',
-          errorData?.error || (err instanceof Error
+          (typeof errorData?.error === 'string' ? errorData.error : null) || (err instanceof Error
             ? err.message
             : 'Impossible d\'accepter la commande pour le moment.'),
         );
@@ -1584,6 +1636,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       isApiConnected,
       isSocketConnected,
       lastSyncAt,
+       pushNotificationStatus,
       refreshEarnings,
       refreshProfile,
     }}>
