@@ -231,11 +231,11 @@ export default function ProfileScreen() {
             {pushNotificationStatus === 'enabled'
               ? 'Notifications push activées'
               : pushNotificationStatus === 'permission-denied'
-                ? 'Notifications push désactivées'
+                ? 'Notifications push désactivées · activez-les dans les réglages'
                 : pushNotificationStatus === 'sync-error'
-                  ? 'Token push non synchronisé'
+                  ? 'Token push refusé par le serveur'
                   : pushNotificationStatus === 'unavailable'
-                    ? 'Notifications push indisponibles'
+                    ? 'Notifications push indisponibles sur cet appareil'
                     : 'Notifications push en préparation…'}
           </Text>
         </View>

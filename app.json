@@ -27,7 +27,7 @@
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION"
       ],
-      "versionCode": 13
+      "versionCode": 14
     },
     "web": {
       "bundler": "metro",
@@ -35,7 +35,13 @@
     },
     "plugins": [
       "expo-router",
-      "expo-notifications",
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "orders",
+          "color": "#E91E8C"
+        }
+      ],
       [
         "expo-location",
         {

@@ -549,7 +549,10 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         }
 
         try {
-          await api.registerPushToken(pushToken);
+          const registration = await api.registerPushToken(pushToken);
+          if (!registration.ok) {
+            throw new Error('Le serveur a refusé le token de notification.');
+          }
           setPushNotificationStatus('enabled');
         } catch (error) {
           console.warn('[DriverContext] push token registration failed:', error);

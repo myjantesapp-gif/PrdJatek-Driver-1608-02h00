@@ -3,38 +3,62 @@ import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 
 let configured = false;
+let configurationInFlight: Promise<boolean> | null = null;
+let permissionRequestAttempted = false;
+
+export const ORDERS_NOTIFICATION_CHANNEL_ID = 'orders';
 
 export async function configureNotifications(): Promise<boolean> {
   if (Platform.OS === 'web') return false;
 
-  if (!configured) {
-    Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowBanner: true,
-        shouldShowList: true,
-        shouldPlaySound: true,
-        shouldSetBadge: true,
-      }),
-    });
-    if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync('orders', {
-        name: 'Commandes',
-        importance: Notifications.AndroidImportance.MAX,
-        sound: 'default',
-        vibrationPattern: [0, 250, 250, 250],
-        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-      });
-    }
-    configured = true;
-  }
+  // Order polling and notification setup can overlap. Share one setup call so
+  // Android does not receive concurrent permission prompts or channel writes.
+  if (configurationInFlight) return configurationInFlight;
 
-  const current = await Notifications.getPermissionsAsync();
-  let status = current.status;
-  if (status !== 'granted') {
-    const requested = await Notifications.requestPermissionsAsync();
-    status = requested.status;
+  configurationInFlight = (async () => {
+    if (!configured) {
+      Notifications.setNotificationHandler({
+        handleNotification: async () => ({
+          shouldShowBanner: true,
+          shouldShowList: true,
+          shouldPlaySound: true,
+          shouldSetBadge: true,
+        }),
+      });
+      if (Platform.OS === 'android') {
+        await Notifications.setNotificationChannelAsync(ORDERS_NOTIFICATION_CHANNEL_ID, {
+          name: 'Commandes',
+          importance: Notifications.AndroidImportance.MAX,
+          sound: 'default',
+          vibrationPattern: [0, 250, 250, 250],
+          enableVibrate: true,
+          enableLights: true,
+          lightColor: '#E91E8C',
+          showBadge: true,
+          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        });
+      }
+      configured = true;
+    }
+
+    const current = await Notifications.getPermissionsAsync();
+    let status = current.status;
+    // Android does not allow a useful second prompt after the driver denies
+    // notifications. Only ask on the first, undetermined permission state;
+    // drivers can re-enable a denial from system settings.
+    if (status === 'undetermined' && !permissionRequestAttempted) {
+      permissionRequestAttempted = true;
+      const requested = await Notifications.requestPermissionsAsync();
+      status = requested.status;
+    }
+    return status === 'granted';
+  })();
+
+  try {
+    return await configurationInFlight;
+  } finally {
+    configurationInFlight = null;
   }
-  return status === 'granted';
 }
 
 /**
@@ -77,7 +101,7 @@ export async function notifyNewOrder(order: {
         ? `${order.restaurantName}${order.earnings ? ` · ${order.earnings.toFixed(2)} €` : ''}`
         : 'Une nouvelle commande vous attend.',
       sound: 'default',
-      ...(Platform.OS === 'android' ? { channelId: 'orders' } : {}),
+      ...(Platform.OS === 'android' ? { channelId: ORDERS_NOTIFICATION_CHANNEL_ID } : {}),
       // Include orderId so notification tap can navigate to the order
       data: { type: 'new_order', orderId: order.orderId ?? null },
     },
