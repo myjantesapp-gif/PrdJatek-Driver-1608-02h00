@@ -48,6 +48,11 @@ export function mapApiStatus(apiStatus: string): DeliveryStatus | null {
   }
 }
 
+export function isReadyForPickupStatus(apiStatus?: string): boolean {
+  const normalized = apiStatus?.trim().toLowerCase().replace(/[\s-]+/g, '_') ?? '';
+  return normalized === 'ready';
+}
+
 export function isAllowedStatusTransition(from: DeliveryStatus, to: DeliveryStatus) {
   switch (from) {
     case 'accepted':
