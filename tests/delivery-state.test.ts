@@ -3,6 +3,7 @@ import {
   getNextDeliveryStatus,
   getNextOrderStatusLabel,
   getWebLocationFallback,
+  isReadyForPickupStatus,
   mapApiStatus,
   shouldRetainActiveDelivery,
   shouldRollbackOptimisticStatus,
@@ -125,6 +126,15 @@ describe('order detail terminal controls', () => {
     expect(getNextDeliveryStatus('at_restaurant')).toBe('picked_up');
     expect(getNextDeliveryStatus('picked_up')).toBe('delivering');
     expect(getNextDeliveryStatus('delivering')).toBe(null);
+  });
+
+  it('only treats ready as an incoming pickup offer', () => {
+    expect(isReadyForPickupStatus('ready')).toBe(true);
+    expect(isReadyForPickupStatus(' READY ')).toBe(true);
+    expect(isReadyForPickupStatus('ready-for-pickup')).toBe(false);
+    expect(isReadyForPickupStatus('accepted')).toBe(false);
+    expect(isReadyForPickupStatus('picked_up')).toBe(false);
+    expect(isReadyForPickupStatus('delivered')).toBe(false);
   });
 });
 

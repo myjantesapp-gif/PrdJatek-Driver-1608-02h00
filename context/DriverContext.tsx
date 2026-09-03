@@ -26,6 +26,7 @@ import {
 import { useAuth } from '@/context/AuthContext';
 import {
   ACTIVE_STATUS_ORDER,
+  isReadyForPickupStatus,
   isAllowedStatusTransition,
   mapApiStatus,
   shouldRetainActiveDelivery,
@@ -741,9 +742,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
   // ── Order sync ───────────────────────────────────────────────────────────────
 
-  const INCOMING_STATUSES = ['pending', 'assigned'];
-  const TERMINAL_STATUSES = ['delivered', 'completed', 'cancelled', 'canceled'];
-
   const lastOrdersRef = useRef<ApiOrder[]>([]);
 
   const popNextFromQueue = useCallback(
@@ -766,8 +764,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         // Check assigned orders first
         const assigned = assignedById.get(nextId);
         if (assigned) {
-          const s = assigned.status?.trim().toLowerCase() ?? '';
-          if (!INCOMING_STATUSES.includes(s)) continue; // accepted/cancelled server-side
+          if (!isReadyForPickupStatus(assigned.status)) continue;
           return mapApiOrder(assigned, driverId);
         }
 
@@ -872,6 +869,16 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       )
         ? detailResult.value
         : undefined;
+      const localOrderIsInAssignedList = localActiveOrder
+        ? assigned.some((order) => order.id === localActiveOrder.apiId)
+        : false;
+      const serverConfirmedMissing = Boolean(
+        localActiveOrder &&
+        !localOrderIsInAssignedList &&
+        detailResult.status === 'rejected' &&
+        detailResult.reason instanceof ApiError &&
+        detailResult.reason.status === 404,
+      );
       if (!assignedRequestSucceeded && !detailedLocalOrder) {
         // A failed list/detail request is not evidence that a delivery ended.
         // Keep the current UI and retry on the next poll without changing
@@ -963,7 +970,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         ? mapApiStatus(serverVersionOfLocal.status)
         : null;
       const retainLocalDelivery = localActiveOrder
-        ? shouldRetainActiveDelivery({
+        ? !serverConfirmedMissing && shouldRetainActiveDelivery({
             localApiId: localActiveOrder.apiId,
             activeOrderIds: activeApiOrders.map((order) => order.id),
             serverStatus: serverVersionOfLocal?.status,
@@ -1074,20 +1081,36 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
         // ── Incoming orders ────────────────────────────────────────────────
         const pendingAssigned = myOrders.filter((o) =>
-          INCOMING_STATUSES.includes(o.status?.trim().toLowerCase() ?? ''),
+          isReadyForPickupStatus(o.status),
         );
         const allIncoming = [
           ...pendingAssigned.map((o) => o.id),
           ...available
             .filter((o) => {
               if (suppressedOfferIds.current.has(o.id)) return false;
-              // Filter out available orders with unknown/terminal statuses
-              const mapped = mapApiStatus(o.status);
-              if (mapped === null || mapped === 'completed' || mapped === 'cancelled') return false;
-              return true;
+              // The available queue is strictly for orders ready for pickup.
+              // Never surface accepted/in-progress/old records as new offers.
+              return isReadyForPickupStatus(o.status);
             })
             .map((o) => o.id),
         ];
+        const readyIncomingIds = new Set(allIncoming);
+        pendingQueueRef.current = pendingQueueRef.current.filter((id) =>
+          readyIncomingIds.has(id),
+        );
+        seenOrderIds.current.forEach((id) => {
+          if (!readyIncomingIds.has(id)) seenOrderIds.current.delete(id);
+        });
+        setIncomingOrder((currentIncoming) => {
+          if (!currentIncoming || readyIncomingIds.has(currentIncoming.apiId)) {
+            return currentIncoming;
+          }
+          if (incomingTimerRef.current) {
+            clearTimeout(incomingTimerRef.current);
+            incomingTimerRef.current = null;
+          }
+          return null;
+        });
 
         let enqueuedNew = false;
         for (const id of allIncoming) {
@@ -1282,13 +1305,39 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       if (!accepted || typeof accepted !== 'object' || !Number.isFinite(Number(accepted.id))) {
         throw new Error('Réponse invalide du serveur lors de l\'acceptation.');
       }
-      const mappedAccepted = mapApiOrder(accepted, driverId);
+      let mappedAccepted = mapApiOrder(accepted, driverId);
       if (
         mappedAccepted.apiId !== orderToAccept.apiId ||
         !ACTIVE_STATUS_ORDER.includes(mappedAccepted.status)
       ) {
         throw new Error('Le serveur n’a pas confirmé l’acceptation de cette commande.');
       }
+
+      // Acceptance reserves the order; immediately confirm pickup so the
+      // backend follows the driver flow ready → picked_up → en_route.
+      if (mappedAccepted.status === 'accepted' || mappedAccepted.status === 'at_restaurant') {
+        try {
+          const pickedUp = await api.updateOrderStatus(
+            orderToAccept.apiId,
+            'picked_up',
+            { driverId: Number(driverId) },
+          );
+          if (
+            !isValidApiOrderResponse(pickedUp, orderToAccept.apiId) ||
+            mapApiStatus(pickedUp.status) !== 'picked_up'
+          ) {
+            throw new Error('Le serveur n’a pas confirmé le statut picked_up.');
+          }
+          mappedAccepted = mapApiOrder(pickedUp, driverId);
+        } catch (pickupError) {
+          console.warn('[DriverContext] pickup status after accept failed:', pickupError);
+          Alert.alert(
+            'Commande acceptée',
+            'La commande est bien attribuée, mais le statut picked_up n’a pas encore été confirmé. Ouvrez-la et réessayez.',
+          );
+        }
+      }
+
       enrichedOrderCache.current.delete(orderToAccept.apiId);
       lastAvailableOrdersRef.current = lastAvailableOrdersRef.current.filter(
         (order) => order.id !== orderToAccept.apiId,
