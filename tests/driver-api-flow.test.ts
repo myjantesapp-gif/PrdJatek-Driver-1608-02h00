@@ -95,4 +95,29 @@ describe('documented driver API flow', () => {
       }),
     );
   });
+
+  it('reconciles status after an empty or wrapped status response', async () => {
+    const updatedOrder = {
+      id: 103,
+      status: 'picked_up',
+      driverId: 7,
+      createdAt: '2026-08-26T08:00:00.000Z',
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(jsonResponse(updatedOrder))
+      .mockResolvedValueOnce(jsonResponse({ order: { ...updatedOrder, status: 'en_route' } }));
+
+    await expect(api.updateOrderStatus(103, 'picked_up')).resolves.toMatchObject(updatedOrder);
+    await expect(api.updateOrderStatus(103, 'en_route')).resolves.toMatchObject({
+      id: 103,
+      status: 'en_route',
+    });
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://ma.jatek.app/api/orders/103/status',
+      'https://ma.jatek.app/api/orders/103',
+      'https://ma.jatek.app/api/orders/103/status',
+    ]);
+  });
 });

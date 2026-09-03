@@ -154,6 +154,20 @@ function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function unwrapOrderResponse(value: unknown, expectedId: number): ApiOrder | null {
+  const candidate = isJsonObject(value) && isJsonObject(value.order)
+    ? value.order
+    : value;
+  if (
+    !isJsonObject(candidate) ||
+    Number(candidate.id) !== expectedId ||
+    typeof candidate.status !== 'string'
+  ) {
+    return null;
+  }
+  return candidate as unknown as ApiOrder;
+}
+
 /**
  * Simplified order shape returned by GET /api/orders/available.
  * Fields differ from ApiOrder — notably items use menuItemName/unitPrice.
@@ -211,6 +225,7 @@ class JatekApi {
     path: string,
     options?: RequestInit,
     expectJson = true,
+    allowEmptyResponse = false,
   ): Promise<T> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -243,6 +258,12 @@ class JatekApi {
     }
 
     const text = await res.text();
+    if (!text.trim() && allowEmptyResponse) {
+      if (!res.ok) {
+        throw new ApiError(`HTTP ${res.status}`, res.status, null);
+      }
+      return {} as T;
+    }
     let data: unknown;
     try {
       data = JSON.parse(text);
@@ -378,18 +399,20 @@ class JatekApi {
   }
 
   async updateOrderStatus(orderId: number, status: string, extra?: Record<string, unknown>): Promise<ApiOrder> {
-    return this.request<ApiOrder>(`/api/orders/${orderId}/status`, {
+    const response = await this.request<unknown>(`/api/orders/${orderId}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ status, ...extra }),
-    });
+    }, true, true);
+    return unwrapOrderResponse(response, orderId) ?? this.getOrder(orderId);
   }
 
   /** Finalizes delivery with the customer's 4-digit pickup code. */
   async confirmDelivery(orderId: number, pickupCode: string): Promise<ApiOrder> {
-    return this.request<ApiOrder>(`/api/orders/${orderId}/confirm-delivery`, {
+    const response = await this.request<unknown>(`/api/orders/${orderId}/confirm-delivery`, {
       method: 'POST',
       body: JSON.stringify({ pickupCode }),
-    });
+    }, true, true);
+    return unwrapOrderResponse(response, orderId) ?? this.getOrder(orderId);
   }
 
   // ── Notifications ─────────────────────────────────────────────────────────

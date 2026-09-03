@@ -43,3 +43,6 @@ Base URL: `https://ma.jatek.app`
 
 **Why:** No auto-discovery endpoint; driver ID must be resolved via the list after login. Available orders use a completely different endpoint and schema from assigned orders.
 **How to apply:** Always poll BOTH `/api/orders` (assigned) AND `/api/orders/available` (pickup queue). Map available orders with `mapAvailableOrder()`, not `mapApiOrder()`.
+
+## Status mutation response
+- Status mutation consumers should reconcile with `GET /api/orders/:id` when `PATCH /api/orders/:id/status` returns an empty body or a wrapper such as `{order: ...}`. Do not treat the mutation as failed solely because its response is not a flat order.
