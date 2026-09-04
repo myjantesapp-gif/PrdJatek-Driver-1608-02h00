@@ -213,7 +213,9 @@ function mapAvailableOrder(order: ApiAvailableOrder): Order {
     distance: 0,
     estimatedPickup: 5,
     estimatedDelivery: order.estimatedDeliveryTime ?? 15,
-    otp: order.kitchenCode ?? order.pickupCode ?? '',
+    // The customer OTP is generated/returned when the order is accepted.
+    // Pickup/kitchen codes from the available queue are not delivery OTPs.
+    otp: '',
     status: 'incoming',
     createdAt: order.createdAt,
     tip: 0,
@@ -450,46 +452,79 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       return () => { cancelled = true; };
     }
 
-    loadActiveOrderSnapshot<Order>(driverId).then((savedOrder) => {
-      if (cancelled) return;
-      const isValidSnapshot = Boolean(
-        savedOrder &&
-        Number.isInteger(savedOrder.apiId) &&
-        savedOrder.apiId > 0 &&
-        savedOrder.id === String(savedOrder.apiId) &&
-        savedOrder.status &&
-        savedOrder.status !== 'incoming' &&
-        savedOrder.status !== 'completed' &&
-        savedOrder.status !== 'cancelled',
-      );
-      if (isValidSnapshot && savedOrder) {
-        activeOrderRef.current = savedOrder;
-        confirmedActiveStatusRef.current = {
-          orderId: savedOrder.id,
-          status: savedOrder.status,
-        };
-        setActiveOrder(savedOrder);
-        statusRef.current = 'busy';
-        setStatusState('busy');
-      } else if (savedOrder) {
-        queueActiveSnapshotWrite(
-          () => clearActiveOrderSnapshot(driverId),
-          'failed to clear invalid active order snapshot',
+    (async () => {
+      try {
+        const savedOrder = await loadActiveOrderSnapshot<Order>(driverId);
+        if (cancelled) return;
+        const isValidSnapshot = Boolean(
+          savedOrder &&
+          Number.isInteger(savedOrder.apiId) &&
+          savedOrder.apiId > 0 &&
+          savedOrder.id === String(savedOrder.apiId) &&
+          savedOrder.status &&
+          savedOrder.status !== 'incoming' &&
+          savedOrder.status !== 'completed' &&
+          savedOrder.status !== 'cancelled',
         );
+        if (savedOrder && !isValidSnapshot) {
+          await clearActiveOrderSnapshot(driverId);
+        } else if (savedOrder) {
+          // Never display a local snapshot until the remote backend confirms
+          // that the order still exists, is active, and belongs to this driver.
+          try {
+            const remoteOrder = await api.getOrder(savedOrder.apiId);
+            const remoteStatus = mapApiStatus(remoteOrder.status);
+            const hasOwnershipFields =
+              'driverId' in remoteOrder || 'assignedDriverId' in remoteOrder;
+            const belongsToDriver =
+              remoteOrder.driverId === driverId ||
+              remoteOrder.assignedDriverId === driverId;
+            const isRemoteActive =
+              remoteStatus !== null && ACTIVE_STATUS_ORDER.includes(remoteStatus);
+            if (
+              !isValidApiOrderResponse(remoteOrder, savedOrder.apiId) ||
+              (hasOwnershipFields && !belongsToDriver) ||
+              !isRemoteActive
+            ) {
+              await clearActiveOrderSnapshot(driverId);
+            } else if (!cancelled) {
+              const confirmedOrder = mergeOrderWithServer(
+                savedOrder,
+                mapApiOrder(remoteOrder, driverId),
+              );
+              activeOrderRef.current = confirmedOrder;
+              confirmedActiveStatusRef.current = {
+                orderId: confirmedOrder.id,
+                status: confirmedOrder.status,
+              };
+              setActiveOrder(confirmedOrder);
+              statusRef.current = 'busy';
+              setStatusState('busy');
+            }
+          } catch (err) {
+            if (err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404)) {
+              await clearActiveOrderSnapshot(driverId);
+            } else {
+              // Keep the snapshot for a later retry, but do not show it
+              // without remote confirmation.
+              console.warn('[DriverContext] active order remote validation failed:', err);
+            }
+          }
+        }
+        if (!activeOrderRef.current && profileAvailabilityRef.current !== null) {
+          const nextStatus = profileAvailabilityRef.current ? 'online' : 'offline';
+          statusRef.current = nextStatus;
+          setStatusState(nextStatus);
+        }
+        activeOrderHydratedRef.current = true;
+        pollOrdersRef.current();
+      } catch (err) {
+        if (cancelled) return;
+        console.warn('[DriverContext] active order restore failed:', err);
+        activeOrderHydratedRef.current = true;
+        pollOrdersRef.current();
       }
-      if (!activeOrderRef.current && profileAvailabilityRef.current !== null) {
-        const nextStatus = profileAvailabilityRef.current ? 'online' : 'offline';
-        statusRef.current = nextStatus;
-        setStatusState(nextStatus);
-      }
-      activeOrderHydratedRef.current = true;
-      pollOrdersRef.current();
-    }).catch((err) => {
-      if (cancelled) return;
-      console.warn('[DriverContext] active order restore failed:', err);
-      activeOrderHydratedRef.current = true;
-      pollOrdersRef.current();
-    });
+    })();
 
     return () => { cancelled = true; };
   }, [driverId, queueActiveSnapshotWrite]);
@@ -781,6 +816,21 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
   const advanceQueueRef = useRef<() => void>(() => {});
 
+  const discardStaleOffer = useCallback((orderId: number) => {
+    suppressedOfferIds.current.add(orderId);
+    pendingQueueRef.current = pendingQueueRef.current.filter((id) => id !== orderId);
+    seenOrderIds.current.delete(orderId);
+    enrichedOrderCache.current.delete(orderId);
+    setIncomingOrder((current) => {
+      if (current?.apiId !== orderId) return current;
+      if (incomingTimerRef.current) {
+        clearTimeout(incomingTimerRef.current);
+        incomingTimerRef.current = null;
+      }
+      return null;
+    });
+  }, []);
+
   const showOrderAlert = useCallback((order: Order) => {
     setIncomingOrder(order);
     notifyNewOrder({
@@ -802,17 +852,32 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         setIncomingOrder(cachedEnriched);
       } else if (driverId) {
         api.getOrder(order.apiId).then((full) => {
-          const enriched = mapApiOrder(full, driverId);
-          const withIncoming = { ...enriched, status: 'incoming' as const };
-          enrichedOrderCache.current.set(order.apiId, withIncoming);
-          // Update the displayed alert if it's still showing this order
-          setIncomingOrder((current) =>
-            current?.apiId === order.apiId ? withIncoming : current,
-          );
-        }).catch(() => {/* non-critical */});
+          const fullStatusIsReady = isReadyForPickupStatus(full.status);
+          const hasOwnershipFields =
+            'driverId' in full || 'assignedDriverId' in full;
+          const belongsToDriver =
+            full.driverId === driverId || full.assignedDriverId === driverId;
+          if (fullStatusIsReady && (!hasOwnershipFields || belongsToDriver)) {
+            const enriched = mapApiOrder(full, driverId);
+            const withIncoming = { ...enriched, status: 'incoming' as const };
+            enrichedOrderCache.current.set(order.apiId, withIncoming);
+            // Update the displayed alert if it's still showing this order
+            setIncomingOrder((current) =>
+              current?.apiId === order.apiId ? withIncoming : current,
+            );
+          } else {
+            discardStaleOffer(order.apiId);
+            advanceQueueRef.current();
+          }
+        }).catch((err) => {
+          if (err instanceof ApiError && err.status === 404) {
+            discardStaleOffer(order.apiId);
+            advanceQueueRef.current();
+          }
+        });
       }
     }
-  }, [driverId]);
+  }, [discardStaleOffer, driverId]);
 
   const advanceQueue = useCallback(() => {
     const next = popNextFromQueue(lastOrdersRef.current, lastAvailableOrdersRef.current);
@@ -1122,13 +1187,28 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
             // Pre-fetch full order details so coordinates are ready when alert shows
             if (!enrichedOrderCache.current.has(id) && driverId) {
               api.getOrder(id).then((full) => {
-                const mapped = mapApiOrder(full, driverId);
-                enrichedOrderCache.current.set(id, { ...mapped, status: 'incoming' });
-                // If this order is currently being displayed, update it live
-                setIncomingOrder((current) =>
-                  current?.apiId === id ? { ...mapped, status: 'incoming' } : current,
-                );
-              }).catch(() => {/* non-critical */});
+                const fullStatusIsReady = isReadyForPickupStatus(full.status);
+                const hasOwnershipFields =
+                  'driverId' in full || 'assignedDriverId' in full;
+                const belongsToDriver =
+                  full.driverId === driverId || full.assignedDriverId === driverId;
+                if (fullStatusIsReady && (!hasOwnershipFields || belongsToDriver)) {
+                  const mapped = mapApiOrder(full, driverId);
+                  enrichedOrderCache.current.set(id, { ...mapped, status: 'incoming' });
+                  // If this order is currently being displayed, update it live
+                  setIncomingOrder((current) =>
+                    current?.apiId === id ? { ...mapped, status: 'incoming' } : current,
+                  );
+                } else {
+                  discardStaleOffer(id);
+                  advanceQueueRef.current();
+                }
+              }).catch((err) => {
+                if (err instanceof ApiError && err.status === 404) {
+                  discardStaleOffer(id);
+                  advanceQueueRef.current();
+                }
+              });
             }
           }
         }
@@ -1152,7 +1232,14 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     })();
     pollInFlightRef.current = poll;
     return poll;
-  }, [driverId, popNextFromQueue, showOrderAlert, persistActiveOrderSnapshot, queueActiveSnapshotWrite]);
+  }, [
+    driverId,
+    discardStaleOffer,
+    popNextFromQueue,
+    showOrderAlert,
+    persistActiveOrderSnapshot,
+    queueActiveSnapshotWrite,
+  ]);
 
   // ── SSE + fallback polling ───────────────────────────────────────────────────
 
@@ -1407,6 +1494,15 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           'Profil incomplet',
           'Veuillez compléter vos informations de véhicule et pièces d\'identité pour accepter des livraisons.',
           [{ text: 'Compléter le profil', onPress: () => router.push('/complete-profile') }],
+        );
+      } else if (status === 404) {
+        // A stale available-order entry must not return on every poll.
+        // Suppression is removed automatically once the remote endpoint stops
+        // advertising this order.
+        suppressedOfferIds.current.add(orderToAccept.apiId);
+        Alert.alert(
+          'Commande introuvable',
+          'Cette commande n’existe plus sur le backend distant et a été retirée de vos offres.',
         );
       } else {
         Alert.alert(
