@@ -31,22 +31,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   // Counter to cancel in-flight login calls if a newer one starts
   const loginVersionRef = useRef(0);
+  const sessionVersionRef = useRef(0);
 
   // Restore session on mount
   useEffect(() => {
     let cancelled = false;
+    const restoreVersion = ++sessionVersionRef.current;
     (async () => {
       try {
         const saved = await loadAuth();
         if (cancelled) return;
-        if (saved) {
+        if (saved && sessionVersionRef.current === restoreVersion) {
           api.setToken(saved.token);
           try {
-            // Verify token still valid by fetching driver profile
-            const drivers = await api.listDrivers();
-            if (cancelled) return;
-            const myDriver = drivers.find((d) => d.userId === saved.userId);
-            if (myDriver) {
+            // Verify token through the authenticated driver's own profile.
+            const myDriver = await api.getCurrentDriver();
+            if (cancelled || sessionVersionRef.current !== restoreVersion) return;
+            if (myDriver && (!myDriver.userId || Number(myDriver.userId) === saved.userId)) {
               setUser({
                 userId: saved.userId,
                 driverId: myDriver.id,
@@ -60,7 +61,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               api.setToken(null);
             }
           } catch (err) {
-            if (cancelled) return;
+            if (cancelled || sessionVersionRef.current !== restoreVersion) return;
             // Only clear stored credentials on an auth error (401/403).
             // Network failures or server errors should not log the driver out.
             const status = err instanceof ApiError ? err.status : 0;
@@ -87,6 +88,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(async (email: string, password: string) => {
     // Bump version so any concurrent older request is ignored on completion
     const version = ++loginVersionRef.current;
+    const sessionVersion = ++sessionVersionRef.current;
 
     await clearAuth();
     api.setToken(null);
@@ -94,23 +96,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const res: LoginResponse = await api.login(email, password);
 
     // Set token immediately so authenticated requests (listDrivers) work
+    if (sessionVersionRef.current !== sessionVersion) return;
     api.setToken(res.token);
 
-    // Find the driver record linked to this user
-    let drivers;
+    // Find the authenticated driver profile
+    let myDriver;
     try {
-      drivers = await api.listDrivers();
+      myDriver = await api.getCurrentDriver();
     } catch (err) {
       // If fetching drivers fails, clear token and re-throw
-      api.setToken(null);
+      if (sessionVersionRef.current === sessionVersion) api.setToken(null);
       throw err;
     }
 
     // If a newer login attempt started, discard this result
-    if (loginVersionRef.current !== version) return;
+    if (
+      loginVersionRef.current !== version ||
+      sessionVersionRef.current !== sessionVersion
+    ) return;
 
-    const myDriver = drivers.find((d) => d.userId === res.user.id);
-    if (!myDriver) {
+    if (!myDriver || (myDriver.userId && Number(myDriver.userId) !== res.user.id)) {
       await clearAuth();
       api.setToken(null);
       throw new Error("Aucun profil livreur trouvé pour ce compte.");
@@ -126,6 +131,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    sessionVersionRef.current += 1;
+    loginVersionRef.current += 1;
     if (user?.driverId) {
       await clearActiveOrderSnapshot(user.driverId).catch(() => {});
     }

@@ -76,6 +76,46 @@ describe('documented driver API flow', () => {
     });
   });
 
+  it('reconciles an empty accept response before showing the order as accepted', async () => {
+    const acceptedOrder = {
+      id: 103,
+      status: 'picked_up',
+      driverId: 7,
+      createdAt: '2026-08-26T08:00:00.000Z',
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(jsonResponse({ data: { order: acceptedOrder } }));
+
+    await expect(api.acceptDelivery(103, 7)).resolves.toMatchObject(acceptedOrder);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://ma.jatek.app/api/orders/103/accept-delivery',
+      'https://ma.jatek.app/api/orders/103',
+    ]);
+  });
+
+  it('loads the authenticated driver from the documented /me endpoint', async () => {
+    const driver = { id: 7, userId: 42, name: 'Ahmed', phone: '+212600000000' };
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({ data: driver }));
+
+    await expect(api.getCurrentDriver()).resolves.toMatchObject(driver);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://ma.jatek.app/api/drivers/me',
+      expect.objectContaining({ headers: { 'Content-Type': 'application/json' } }),
+    );
+  });
+
+  it('keeps the HTTP status when the server returns non-JSON error content', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response('<html>Bad Gateway</html>', { status: 502 }),
+    );
+
+    await expect(api.getAvailableOrders()).rejects.toMatchObject({
+      status: 502,
+    });
+  });
+
   it('registers the Expo token through the authenticated driver endpoint', async () => {
     api.setToken('test-token');
     const fetchMock = vi.spyOn(globalThis, 'fetch')

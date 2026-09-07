@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  ActivityIndicator,
   Animated,
   Platform,
 } from 'react-native';
@@ -14,7 +15,7 @@ import { Order } from '@/context/DriverContext';
 
 interface LiveOrderAlertProps {
   order: Order;
-  onAccept: () => void;
+  onAccept: () => void | Promise<void>;
   onDecline: () => void;
 }
 
@@ -22,6 +23,7 @@ const TIMEOUT_SECONDS = 25;
 
 export function LiveOrderAlert({ order, onAccept, onDecline }: LiveOrderAlertProps) {
   const [timeLeft, setTimeLeft] = useState(TIMEOUT_SECONDS);
+  const [accepting, setAccepting] = useState(false);
   const slideAnim = useRef(new Animated.Value(400)).current;
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -63,12 +65,18 @@ export function LiveOrderAlert({ order, onAccept, onDecline }: LiveOrderAlertPro
   const totalItems = order.items.reduce((s, i) => s + i.quantity, 0);
   const progressWidth = `${(timeLeft / TIMEOUT_SECONDS) * 100}%`;
 
-  const handleAccept = () => {
+  const handleAccept = async () => {
+    if (accepting) return;
+    setAccepting(true);
     if (Platform.OS !== 'web') {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     }
     if (timerRef.current) clearInterval(timerRef.current);
-    onAcceptRef.current();
+    try {
+      await onAcceptRef.current();
+    } finally {
+      setAccepting(false);
+    }
   };
 
   const handleDecline = () => {
@@ -125,12 +133,26 @@ export function LiveOrderAlert({ order, onAccept, onDecline }: LiveOrderAlertPro
       </View>
 
       <View style={styles.actions}>
-        <TouchableOpacity style={styles.declineBtn} onPress={handleDecline} activeOpacity={0.8}>
+        <TouchableOpacity
+          style={styles.declineBtn}
+          onPress={handleDecline}
+          disabled={accepting}
+          activeOpacity={0.8}
+        >
           <Ionicons name="close" size={22} color={Colors.error} />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.acceptBtn} onPress={handleAccept} activeOpacity={0.8}>
-          <Ionicons name="checkmark" size={20} color="#000" />
-          <Text style={styles.acceptText}>Accepter</Text>
+        <TouchableOpacity
+          style={[styles.acceptBtn, accepting && styles.acceptBtnDisabled]}
+          onPress={handleAccept}
+          disabled={accepting}
+          activeOpacity={0.8}
+        >
+          {accepting ? (
+            <ActivityIndicator size="small" color="#000" />
+          ) : (
+            <Ionicons name="checkmark" size={20} color="#000" />
+          )}
+          <Text style={styles.acceptText}>{accepting ? 'Connexion…' : 'Accepter'}</Text>
         </TouchableOpacity>
       </View>
     </Animated.View>
@@ -276,6 +298,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
+  },
+  acceptBtnDisabled: {
+    opacity: 0.65,
   },
   acceptText: {
     color: '#000',

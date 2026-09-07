@@ -154,10 +154,25 @@ function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function unwrapData(value: unknown): unknown {
+  let current = value;
+  for (let i = 0; i < 3; i += 1) {
+    if (!isJsonObject(current)) return current;
+    if (isJsonObject(current.order)) {
+      current = current.order;
+      continue;
+    }
+    if (isJsonObject(current.data)) {
+      current = current.data;
+      continue;
+    }
+    return current;
+  }
+  return current;
+}
+
 function unwrapOrderResponse(value: unknown, expectedId: number): ApiOrder | null {
-  const candidate = isJsonObject(value) && isJsonObject(value.order)
-    ? value.order
-    : value;
+  const candidate = unwrapData(value);
   if (
     !isJsonObject(candidate) ||
     Number(candidate.id) !== expectedId ||
@@ -258,16 +273,20 @@ class JatekApi {
     }
 
     const text = await res.text();
-    if (!text.trim() && allowEmptyResponse) {
+    if (!text.trim()) {
       if (!res.ok) {
         throw new ApiError(`HTTP ${res.status}`, res.status, null);
       }
-      return {} as T;
+      if (allowEmptyResponse) return {} as T;
+      throw new ApiError(`Réponse vide (HTTP ${res.status})`, res.status, null);
     }
     let data: unknown;
     try {
       data = JSON.parse(text);
     } catch {
+      if (!res.ok) {
+        throw new ApiError(`HTTP ${res.status}`, res.status, null);
+      }
       throw new Error(`Non-JSON response: ${text.slice(0, 200)}`);
     }
 
@@ -306,7 +325,21 @@ class JatekApi {
   // ── Drivers ───────────────────────────────────────────────────────────────
 
   async listDrivers(): Promise<ApiDriverProfile[]> {
-    return this.request<ApiDriverProfile[]>('/api/drivers');
+    const response = await this.request<unknown>('/api/drivers');
+    if (Array.isArray(response)) return response as ApiDriverProfile[];
+    if (isJsonObject(response) && Array.isArray(response.drivers)) {
+      return response.drivers as unknown as ApiDriverProfile[];
+    }
+    throw new Error('Réponse invalide lors du chargement des livreurs.');
+  }
+
+  async getCurrentDriver(): Promise<ApiDriverProfile> {
+    const response = await this.request<unknown>('/api/drivers/me');
+    const candidate = unwrapData(response);
+    if (!isJsonObject(candidate) || !Number.isFinite(Number(candidate.id))) {
+      throw new Error('Réponse invalide lors du chargement du profil livreur.');
+    }
+    return candidate as unknown as ApiDriverProfile;
   }
 
   async getDriver(id: number): Promise<ApiDriverProfile> {
@@ -350,6 +383,13 @@ class JatekApi {
     });
   }
 
+  async heartbeat(id: number): Promise<void> {
+    await this.request<unknown>(`/api/drivers/${id}/heartbeat`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }, true, true);
+  }
+
   async getEarnings(id: number): Promise<ApiEarnings> {
     return this.request<ApiEarnings>(`/api/drivers/${id}/earnings`);
   }
@@ -369,12 +409,22 @@ class JatekApi {
 
   async getOrders(params?: Record<string, string>): Promise<ApiOrder[]> {
     const qs = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.request<ApiOrder[]>(`/api/orders${qs}`);
+    const response = await this.request<unknown>(`/api/orders${qs}`);
+    if (Array.isArray(response)) return response as ApiOrder[];
+    if (isJsonObject(response) && Array.isArray(response.orders)) {
+      return response.orders as unknown as ApiOrder[];
+    }
+    throw new Error('Réponse invalide lors du chargement des commandes.');
   }
 
   /** Orders visible to all available drivers — pending pickup, not yet assigned. */
   async getAvailableOrders(): Promise<ApiAvailableOrder[]> {
-    return this.request<ApiAvailableOrder[]>('/api/orders/available');
+    const response = await this.request<unknown>('/api/orders/available');
+    if (Array.isArray(response)) return response as ApiAvailableOrder[];
+    if (isJsonObject(response) && Array.isArray(response.orders)) {
+      return response.orders as unknown as ApiAvailableOrder[];
+    }
+    throw new Error('Réponse invalide lors du chargement des offres.');
   }
 
   /**
@@ -391,12 +441,15 @@ class JatekApi {
     const response = await this.request<unknown>(`/api/orders/${orderId}/accept-delivery`, {
       method: 'POST',
       body: JSON.stringify({ driverId }),
-    });
+    }, true, true);
     return unwrapOrderResponse(response, orderId) ?? this.getOrder(orderId);
   }
 
   async getOrder(id: number): Promise<ApiOrder> {
-    return this.request<ApiOrder>(`/api/orders/${id}`);
+    const response = await this.request<unknown>(`/api/orders/${id}`);
+    return unwrapOrderResponse(response, id) ?? (() => {
+      throw new Error(`Réponse invalide pour la commande ${id}.`);
+    })();
   }
 
   async updateOrderStatus(orderId: number, status: string, extra?: Record<string, unknown>): Promise<ApiOrder> {

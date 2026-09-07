@@ -773,9 +773,17 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
     syncLocation();
     locationIntervalRef.current = setInterval(syncLocation, DRIVER_LOCATION_POLL_MS);
+    const heartbeatInterval = setInterval(() => {
+      if (!cancelled) {
+        api.heartbeat(driverId).catch((err) => {
+          console.warn('[DriverContext] driver heartbeat failed:', err);
+        });
+      }
+    }, 25_000);
 
     return () => {
       cancelled = true;
+      clearInterval(heartbeatInterval);
       if (locationIntervalRef.current) {
         clearInterval(locationIntervalRef.current);
         locationIntervalRef.current = null;
@@ -926,15 +934,24 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       const assignedRequestSucceeded = (
         assignedResult.status === 'fulfilled' && Array.isArray(assignedResult.value)
       );
-      const assigned: ApiOrder[] = assignedRequestSucceeded
+      const assignedFromServer: ApiOrder[] = assignedRequestSucceeded
         ? assignedResult.value
         : [];
       const availableRequestSucceeded = (
         availableResult.status === 'fulfilled' && Array.isArray(availableResult.value)
       );
-      const available: ApiAvailableOrder[] = availableRequestSucceeded
+      const availableFromServer: ApiAvailableOrder[] = availableRequestSucceeded
         ? availableResult.value
         : [];
+      // A single failed list request is not an empty list. Keep the last
+      // authoritative snapshot so transient network/5xx errors do not erase
+      // offers or make an active delivery disappear from the UI.
+      const assigned = assignedRequestSucceeded
+        ? assignedFromServer
+        : lastOrdersRef.current;
+      const available = availableRequestSucceeded
+        ? availableFromServer
+        : lastAvailableOrdersRef.current;
       const detailedLocalOrder: ApiOrder | undefined = (
         localActiveOrder &&
         detailResult.status === 'fulfilled' &&
@@ -943,17 +960,18 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       )
         ? detailResult.value
         : undefined;
-      const localOrderIsInAssignedList = localActiveOrder
-        ? assigned.some((order) => sameOrderId(order.id, localActiveOrder.apiId))
-        : false;
       const serverConfirmedMissing = Boolean(
         localActiveOrder &&
-        !localOrderIsInAssignedList &&
         detailResult.status === 'rejected' &&
         detailResult.reason instanceof ApiError &&
         detailResult.reason.status === 404,
       );
-      if (!assignedRequestSucceeded && !detailedLocalOrder) {
+      const hasUsableResponse = (
+        assignedRequestSucceeded ||
+        availableRequestSucceeded ||
+        Boolean(detailedLocalOrder)
+      );
+      if (!hasUsableResponse) {
         // A failed list/detail request is not evidence that a delivery ended.
         // Keep the current UI and retry on the next poll without changing
         // availability or clearing incoming offers.
@@ -970,16 +988,21 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       const ordersForSync = detailedLocalOrder
         ? [
             detailedLocalOrder,
-            ...assigned.filter((order) => order.id !== detailedLocalOrder.id),
+          ...assigned.filter((order) => !sameOrderId(order.id, detailedLocalOrder.id)),
           ]
         : assigned;
 
       setLastSyncAt(new Date());
-      setIsApiConnected(true);
+      setIsApiConnected(
+        assignedRequestSucceeded &&
+        (!isOnline || availableRequestSucceeded || !localActiveOrder),
+      );
 
-      lastOrdersRef.current = assigned;
+      if (assignedRequestSucceeded) {
+        lastOrdersRef.current = assignedFromServer;
+      }
       if (availableRequestSucceeded) {
-        lastAvailableOrdersRef.current = available;
+        lastAvailableOrdersRef.current = availableFromServer;
       }
 
       const visibleAvailableIds = new Set(available.map((order) => order.id));
@@ -1080,7 +1103,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         const activeApiOrder = matchingLocalOrder ?? activeApiOrders[0];
         const mapped = mapApiOrder(activeApiOrder, driverId);
         let nextActiveOrder = mapped;
-        if (localActiveOrder?.apiId === activeApiOrder.id) {
+        if (localActiveOrder && sameOrderId(activeApiOrder.id, localActiveOrder.apiId)) {
           confirmedActiveStatusRef.current = {
             orderId: localActiveOrder.id,
             status: mapped.status,
@@ -1324,12 +1347,18 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       const payload = getSsePayload(event);
       const nested = payload ? getSseNestedPayload(payload) : {};
       const assignedDriverId = Number(payload?.driverId ?? nested.driverId);
-      const isMine = assignedDriverId === driverId;
-      const isOfferRemoval = /assigned|accepted|taken|removed|unavailable|status/i.test(event.type);
+      const isOfferRemoval = /assigned|accepted|taken|removed|unavailable/i.test(event.type);
 
-      if (isOfferRemoval && !isMine) {
+      // Only remove an offer when the event explicitly identifies another
+      // driver. Status events often omit driverId and must never be treated as
+      // proof that an available order was taken.
+      if (
+        isOfferRemoval &&
+        Number.isFinite(assignedDriverId) &&
+        assignedDriverId !== driverId
+      ) {
         lastAvailableOrdersRef.current = lastAvailableOrdersRef.current.filter(
-          (order) => order.id !== orderId,
+          (order) => !sameOrderId(order.id, orderId),
         );
         suppressedOfferIds.current.add(orderId);
         pendingQueueRef.current = pendingQueueRef.current.filter((id) => id !== orderId);
@@ -1438,7 +1467,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
       enrichedOrderCache.current.delete(orderToAccept.apiId);
       lastAvailableOrdersRef.current = lastAvailableOrdersRef.current.filter(
-        (order) => order.id !== orderToAccept.apiId,
+        (order) => !sameOrderId(order.id, orderToAccept.apiId),
       );
       pendingQueueRef.current = pendingQueueRef.current.filter((id) => id !== orderToAccept.apiId);
       activeOrderRef.current = mappedAccepted;
@@ -1452,6 +1481,41 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       });
     } catch (err) {
       console.warn('[DriverContext] acceptOrder API call failed:', err);
+      // The request may have committed before the connection failed. Confirm
+      // the order once before presenting an error or deleting the offer.
+      try {
+        const remoteOrder = await api.getOrder(orderToAccept.apiId);
+        const mappedRemote = mapApiOrder(remoteOrder, driverId);
+        const hasOwnershipFields =
+          'driverId' in remoteOrder || 'assignedDriverId' in remoteOrder;
+        const belongsToDriver =
+          sameDriverId(remoteOrder.driverId, driverId) ||
+          sameDriverId(remoteOrder.assignedDriverId, driverId);
+        if (
+          isValidApiOrderResponse(remoteOrder, orderToAccept.apiId) &&
+          ACTIVE_STATUS_ORDER.includes(mappedRemote.status) &&
+          (!hasOwnershipFields || belongsToDriver)
+        ) {
+          enrichedOrderCache.current.delete(orderToAccept.apiId);
+          lastAvailableOrdersRef.current = lastAvailableOrdersRef.current.filter(
+            (order) => Number(order.id) !== orderToAccept.apiId,
+          );
+          pendingQueueRef.current = pendingQueueRef.current.filter(
+            (id) => id !== orderToAccept.apiId,
+          );
+          activeOrderRef.current = mappedRemote;
+          setActiveOrder(mappedRemote);
+          setTerminalOrder(null);
+          setStatusState('busy');
+          statusRef.current = 'busy';
+          persistActiveOrderSnapshot(mappedRemote);
+          Alert.alert('Commande acceptée', 'La commande a été récupérée malgré une réponse réseau interrompue.');
+          return;
+        }
+      } catch (reconciliationError) {
+        console.warn('[DriverContext] accept reconciliation failed:', reconciliationError);
+      }
+
       const hasActiveDelivery = Boolean(existingActiveOrder || activeOrderRef.current);
       if (hasActiveDelivery) {
         if (existingActiveOrder) {
@@ -1472,14 +1536,19 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         ? err.data
         : null;
 
-      lastAvailableOrdersRef.current = lastAvailableOrdersRef.current.filter(
-        (order) => order.id !== orderToAccept.apiId,
-      );
-      pendingQueueRef.current = pendingQueueRef.current.filter((id) => id !== orderToAccept.apiId);
-      enrichedOrderCache.current.delete(orderToAccept.apiId);
-      seenOrderIds.current.delete(orderToAccept.apiId);
+      const removeUnavailableOffer = () => {
+        lastAvailableOrdersRef.current = lastAvailableOrdersRef.current.filter(
+          (order) => Number(order.id) !== orderToAccept.apiId,
+        );
+        pendingQueueRef.current = pendingQueueRef.current.filter(
+          (id) => id !== orderToAccept.apiId,
+        );
+        enrichedOrderCache.current.delete(orderToAccept.apiId);
+        seenOrderIds.current.delete(orderToAccept.apiId);
+      };
 
       if (status === 409 && (isDriverBusyConflict(err) || hasActiveDelivery)) {
+        removeUnavailableOffer();
         if (!hasActiveDelivery) {
           await pollOrdersRef.current();
         }
@@ -1489,6 +1558,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           'Vous avez déjà une livraison en cours. Terminez-la avant d’en accepter une autre.',
         );
       } else if (status === 409) {
+        removeUnavailableOffer();
         suppressedOfferIds.current.add(orderToAccept.apiId);
         Alert.alert(
           'Commande non disponible',
@@ -1498,6 +1568,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           advanceQueueRef.current();
         }
       } else if (status === 412) {
+        removeUnavailableOffer();
         setStatusState('offline');
         statusRef.current = 'offline';
         suppressedOfferIds.current.add(orderToAccept.apiId);
@@ -1510,19 +1581,23 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         // A stale available-order entry must not return on every poll.
         // Suppression is removed automatically once the remote endpoint stops
         // advertising this order.
+        removeUnavailableOffer();
         suppressedOfferIds.current.add(orderToAccept.apiId);
         Alert.alert(
           'Commande introuvable',
           'Cette commande n’existe plus sur le backend distant et a été retirée de vos offres.',
         );
       } else {
+        // Network/5xx/validation failures are retryable. Keep the offer
+        // visible instead of losing it until the next successful poll.
+        seenOrderIds.current.add(orderToAccept.apiId);
+        setIncomingOrder(orderToAccept);
         Alert.alert(
-          'Erreur',
+          'Connexion interrompue',
           (typeof errorData?.error === 'string' ? errorData.error : null) || (err instanceof Error
             ? err.message
-            : 'Impossible d\'accepter la commande pour le moment.'),
+            : 'Impossible d\'accepter la commande pour le moment. Réessayez.'),
         );
-        advanceQueueRef.current();
       }
     } finally {
       acceptingOrderIdRef.current = null;
@@ -1553,16 +1628,40 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
    * and disable UI during the request (preventing duplicate transitions).
    */
   const updateOrderStatus = useCallback(async (id: string, newStatus: Order['status']): Promise<boolean> => {
-    const currentOrder = activeOrderRef.current;
     const orderId = Number(id);
-    if (
-      !currentOrder ||
-      currentOrder.id !== id ||
-      !Number.isInteger(orderId) ||
-      !driverId
-    ) {
+    if (!Number.isInteger(orderId) || !driverId) {
       Alert.alert('Mise à jour impossible', 'La commande active n’est plus disponible.');
       return false;
+    }
+    let currentOrder = activeOrderRef.current;
+    // The detail screen can still render a retained snapshot while a poll is
+    // reconnecting. Rehydrate the authoritative order instead of rejecting a
+    // valid driver action just because the in-memory ref was briefly cleared.
+    if (!currentOrder || currentOrder.id !== id) {
+      try {
+        const remoteOrder = await api.getOrder(orderId);
+        const hasOwnershipFields =
+          'driverId' in remoteOrder || 'assignedDriverId' in remoteOrder;
+        const belongsToDriver =
+          sameDriverId(remoteOrder.driverId, driverId) ||
+          sameDriverId(remoteOrder.assignedDriverId, driverId);
+        if (!isValidApiOrderResponse(remoteOrder, orderId) || (hasOwnershipFields && !belongsToDriver)) {
+          throw new Error('La commande active n’est plus attribuée à ce livreur.');
+        }
+        currentOrder = mapApiOrder(remoteOrder, driverId);
+        activeOrderRef.current = currentOrder;
+        setActiveOrder(currentOrder);
+        statusRef.current = 'busy';
+        setStatusState('busy');
+      } catch (err) {
+        const message = err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'La commande active n’est plus disponible.';
+        Alert.alert('Mise à jour impossible', message);
+        return false;
+      }
     }
     if (!isAllowedStatusTransition(currentOrder.status, newStatus)) {
       Alert.alert('Statut non valide', 'Cette étape de livraison ne peut pas être effectuée maintenant.');
