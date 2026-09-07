@@ -388,10 +388,11 @@ class JatekApi {
    * The backend returns 412 when the driver's mandatory profile is incomplete.
    */
   async acceptDelivery(orderId: number, driverId: number): Promise<ApiOrder> {
-    return this.request<ApiOrder>(`/api/orders/${orderId}/accept-delivery`, {
+    const response = await this.request<unknown>(`/api/orders/${orderId}/accept-delivery`, {
       method: 'POST',
       body: JSON.stringify({ driverId }),
     });
+    return unwrapOrderResponse(response, orderId) ?? this.getOrder(orderId);
   }
 
   async getOrder(id: number): Promise<ApiOrder> {

@@ -20,13 +20,13 @@ export function mapApiStatus(apiStatus: string): DeliveryStatus | null {
   switch (status) {
     case 'pending':
     case 'assigned':
+    case 'ready':
       return 'incoming';
     case 'accepted':
       return 'accepted';
     case 'at_restaurant':
     case 'ready_for_pickup':
     case 'preparing':
-    case 'ready':
       return 'at_restaurant';
     case 'picked_up':
     case 'pickedup':
@@ -79,10 +79,10 @@ export function shouldRetainActiveDelivery({
   serverStatus,
 }: {
   localApiId: number;
-  activeOrderIds: readonly number[];
+  activeOrderIds: readonly unknown[];
   serverStatus?: string;
 }) {
-  const hasMatchingActiveOrder = activeOrderIds.some((id) => id === localApiId);
+  const hasMatchingActiveOrder = activeOrderIds.some((id) => Number(id) === localApiId);
   const confirmedStatus = serverStatus ? mapApiStatus(serverStatus) : null;
   const serverConfirmedTerminal =
     confirmedStatus === 'completed' || confirmedStatus === 'cancelled';

@@ -137,6 +137,14 @@ function isValidApiOrderResponse(value: unknown, expectedId: number) {
   );
 }
 
+function sameDriverId(value: unknown, driverId: number) {
+  return Number(value) === driverId;
+}
+
+function sameOrderId(value: unknown, orderId: number) {
+  return Number(value) === orderId;
+}
+
 /**
  * Status responses sometimes omit relational fields. Keep the existing order
  * details unless the server explicitly supplies a non-empty replacement.
@@ -477,8 +485,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
             const hasOwnershipFields =
               'driverId' in remoteOrder || 'assignedDriverId' in remoteOrder;
             const belongsToDriver =
-              remoteOrder.driverId === driverId ||
-              remoteOrder.assignedDriverId === driverId;
+              sameDriverId(remoteOrder.driverId, driverId) ||
+              sameDriverId(remoteOrder.assignedDriverId, driverId);
             const isRemoteActive =
               remoteStatus !== null && ACTIVE_STATUS_ORDER.includes(remoteStatus);
             if (
@@ -856,7 +864,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           const hasOwnershipFields =
             'driverId' in full || 'assignedDriverId' in full;
           const belongsToDriver =
-            full.driverId === driverId || full.assignedDriverId === driverId;
+            sameDriverId(full.driverId, driverId) ||
+            sameDriverId(full.assignedDriverId, driverId);
           if (fullStatusIsReady && (!hasOwnershipFields || belongsToDriver)) {
             const enriched = mapApiOrder(full, driverId);
             const withIncoming = { ...enriched, status: 'incoming' as const };
@@ -935,7 +944,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         ? detailResult.value
         : undefined;
       const localOrderIsInAssignedList = localActiveOrder
-        ? assigned.some((order) => order.id === localActiveOrder.apiId)
+        ? assigned.some((order) => sameOrderId(order.id, localActiveOrder.apiId))
         : false;
       const serverConfirmedMissing = Boolean(
         localActiveOrder &&
@@ -980,9 +989,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
       const myOrders = ordersForSync.filter(
         (o) =>
-          o.id === localActiveOrder?.apiId ||
-          o.driverId === driverId ||
-          o.assignedDriverId === driverId,
+          (localActiveOrder && sameOrderId(o.id, localActiveOrder.apiId)) ||
+          sameDriverId(o.driverId, driverId) ||
+          sameDriverId(o.assignedDriverId, driverId),
       );
 
       // ── Active in-progress orders ──────────────────────────────────────────
@@ -994,6 +1003,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         return (
           mapped !== null &&
           mapped !== 'incoming' &&   // not yet accepted — use incoming-offer flow
+          !isReadyForPickupStatus(o.status) && // ready is an offer, never an active delivery
           mapped !== 'completed' &&
           mapped !== 'cancelled'
         );
@@ -1029,7 +1039,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       }
 
       const serverVersionOfLocal = localActiveOrder
-        ? myOrders.find((order) => order.id === localActiveOrder.apiId)
+        ? myOrders.find((order) => sameOrderId(order.id, localActiveOrder.apiId))
         : undefined;
       const confirmedLocalStatus = serverVersionOfLocal
         ? mapApiStatus(serverVersionOfLocal.status)
@@ -1044,7 +1054,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
       if (activeApiOrders.length > 0) {
         const matchingLocalOrder = activeApiOrders.find(
-          (order) => order.id === localActiveOrder?.apiId,
+          (order) => localActiveOrder && sameOrderId(order.id, localActiveOrder.apiId),
         );
         if (
           localActiveOrder &&
@@ -1191,7 +1201,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
                 const hasOwnershipFields =
                   'driverId' in full || 'assignedDriverId' in full;
                 const belongsToDriver =
-                  full.driverId === driverId || full.assignedDriverId === driverId;
+                  sameDriverId(full.driverId, driverId) ||
+                  sameDriverId(full.assignedDriverId, driverId);
                 if (fullStatusIsReady && (!hasOwnershipFields || belongsToDriver)) {
                   const mapped = mapApiOrder(full, driverId);
                   enrichedOrderCache.current.set(id, { ...mapped, status: 'incoming' });

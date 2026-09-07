@@ -32,6 +32,15 @@ describe('delivery polling retention', () => {
     ).toBe(true);
   });
 
+  it('accepts string order IDs from loosely typed API JSON', () => {
+    expect(
+      shouldRetainActiveDelivery({
+        localApiId: 42,
+        activeOrderIds: ['42'],
+      }),
+    ).toBe(false);
+  });
+
   it('does not retain a delivery once its own server record is terminal', () => {
     expect(
       shouldRetainActiveDelivery({
@@ -52,6 +61,7 @@ describe('delivery polling retention', () => {
   it('normalizes the API status variants used by polling responses', () => {
     expect(mapApiStatus('picked-up')).toBe('picked_up');
     expect(mapApiStatus(' out for delivery ')).toBe('delivering');
+    expect(mapApiStatus(' ready ')).toBe('incoming');
     expect(mapApiStatus('not-a-real-status')).toBe(null);
   });
 });
