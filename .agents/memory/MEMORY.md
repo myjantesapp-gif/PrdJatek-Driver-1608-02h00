@@ -5,3 +5,4 @@
 - [Expo web preview startup](expo-web-preview.md) — use offline production-preview mode when DevTools cannot load its Linux shell
 - [Android notification permissions](android-notification-permissions.md) — prompt only from the undetermined state; denied users must use system settings to re-enable alerts
 - [Remote API CORS](remote-api-cors.md) — native Android reaches ma.jatek.app directly; browser-origin requests from driver.jatek.app currently fail server-side
+- [Android hardware validation](android-hardware-validation.md) — this Replit workspace has no Android SDK, adb, emulator, or connected device; real APK checks require external hardware
