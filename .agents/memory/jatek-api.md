@@ -53,3 +53,10 @@ Base URL: `https://ma.jatek.app`
 
 ## Status mutation response
 - Status mutation consumers should reconcile with `GET /api/orders/:id` when `PATCH /api/orders/:id/status` returns an empty body or a wrapper such as `{order: ...}`. Do not treat the mutation as failed solely because its response is not a flat order.
+
+## Live assignment inconsistency
+- In live testing, `accept-delivery` can return `status: "accepted"` while `/api/orders/:id/status` rejects `picked_up` as an invalid current state; do not assume the documented `ready → picked_up` transition is deployed.
+
+**Why:** The mobile flow can become stuck after a successful-looking accept if the backend assignment and status state machine are out of sync.
+
+**How to apply:** Keep the accepted delivery visible and report the server response; resolve the backend transition contract before adding client-side status coercion or falsely completing the order.
