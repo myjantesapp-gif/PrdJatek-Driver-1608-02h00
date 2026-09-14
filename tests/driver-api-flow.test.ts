@@ -42,6 +42,26 @@ describe('documented driver API flow', () => {
     );
   });
 
+  it('normalizes wrapped available orders with string IDs', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({
+        data: {
+          availableOrders: [{
+            id: '104',
+            status: 'ready-for-pickup',
+            createdAt: '2026-08-26T08:00:00.000Z',
+          }],
+        },
+      }));
+
+    await expect(api.getAvailableOrders()).resolves.toEqual([{
+      id: 104,
+      status: 'ready-for-pickup',
+      createdAt: '2026-08-26T08:00:00.000Z',
+    }]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('accepts, advances, and confirms one delivery with the documented payloads', async () => {
     const acceptedOrder = {
       id: 103,

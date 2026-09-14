@@ -542,7 +542,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const refreshProfile = useCallback(async () => {
     if (!driverId) return;
     try {
-      const d: ApiDriverProfile = await api.getDriver(driverId);
+      // /me is authoritative for the authenticated session. It also avoids
+      // keeping a stale driverId from a previous login in sync.
+      const d: ApiDriverProfile = await api.getCurrentDriver();
       setProfile({
         id: String(d.id),
         name: d.name,
@@ -1316,6 +1318,14 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     pollOrdersRef.current = pollOrders;
   }, [pollOrders]);
 
+  // Profile restoration and the status toggle can both make the driver online
+  // after the SSE effect has already performed its initial poll. Reconcile
+  // immediately instead of waiting for the 3-second fallback interval.
+  useEffect(() => {
+    if (!driverId || status !== 'online' || activeOrderRef.current) return;
+    void pollOrdersRef.current();
+  }, [driverId, status]);
+
   useEffect(() => {
     if (!driverId) return;
 
@@ -1438,31 +1448,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         !ACTIVE_STATUS_ORDER.includes(mappedAccepted.status)
       ) {
         throw new Error('Le serveur n’a pas confirmé l’acceptation de cette commande.');
-      }
-
-      // Acceptance reserves the order; immediately confirm pickup so the
-      // backend follows the driver flow ready → picked_up → en_route.
-      if (mappedAccepted.status === 'accepted' || mappedAccepted.status === 'at_restaurant') {
-        try {
-          const pickedUp = await api.updateOrderStatus(
-            orderToAccept.apiId,
-            'picked_up',
-            { driverId: Number(driverId) },
-          );
-          if (
-            !isValidApiOrderResponse(pickedUp, orderToAccept.apiId) ||
-            mapApiStatus(pickedUp.status) !== 'picked_up'
-          ) {
-            throw new Error('Le serveur n’a pas confirmé le statut picked_up.');
-          }
-          mappedAccepted = mapApiOrder(pickedUp, driverId);
-        } catch (pickupError) {
-          console.warn('[DriverContext] pickup status after accept failed:', pickupError);
-          Alert.alert(
-            'Commande acceptée',
-            'La commande est bien attribuée, mais le statut picked_up n’a pas encore été confirmé. Ouvrez-la et réessayez.',
-          );
-        }
       }
 
       enrichedOrderCache.current.delete(orderToAccept.apiId);

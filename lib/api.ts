@@ -183,6 +183,42 @@ function unwrapOrderResponse(value: unknown, expectedId: number): ApiOrder | nul
   return candidate as unknown as ApiOrder;
 }
 
+function unwrapArrayResponse(
+  value: unknown,
+  keys: readonly string[],
+): unknown[] | null {
+  let current = value;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (Array.isArray(current)) return current;
+    if (!isJsonObject(current)) return null;
+
+    const object = current;
+    const nextKey = keys.find((key) => key in object);
+    if (!nextKey) return null;
+    current = object[nextKey];
+  }
+  return Array.isArray(current) ? current : null;
+}
+
+function normalizeOrderList<T extends { id: number; status: string }>(
+  value: unknown,
+  keys: readonly string[],
+): T[] | null {
+  const list = unwrapArrayResponse(value, keys);
+  if (!list) return null;
+
+  return (
+    list
+      .filter(isJsonObject)
+      .map((order) => ({
+        ...order,
+        id: Number(order.id),
+        status: String(order.status ?? ''),
+      }))
+      .filter((order) => Number.isFinite(order.id) && order.id > 0 && order.status)
+  ) as T[];
+}
+
 /**
  * Simplified order shape returned by GET /api/orders/available.
  * Fields differ from ApiOrder — notably items use menuItemName/unitPrice.
@@ -410,9 +446,9 @@ class JatekApi {
   async getOrders(params?: Record<string, string>): Promise<ApiOrder[]> {
     const qs = params ? '?' + new URLSearchParams(params).toString() : '';
     const response = await this.request<unknown>(`/api/orders${qs}`);
-    if (Array.isArray(response)) return response as ApiOrder[];
-    if (isJsonObject(response) && Array.isArray(response.orders)) {
-      return response.orders as unknown as ApiOrder[];
+    const orders = normalizeOrderList<ApiOrder>(response, ['orders', 'data']);
+    if (orders) {
+      return orders;
     }
     throw new Error('Réponse invalide lors du chargement des commandes.');
   }
@@ -420,9 +456,13 @@ class JatekApi {
   /** Orders visible to all available drivers — pending pickup, not yet assigned. */
   async getAvailableOrders(): Promise<ApiAvailableOrder[]> {
     const response = await this.request<unknown>('/api/orders/available');
-    if (Array.isArray(response)) return response as ApiAvailableOrder[];
-    if (isJsonObject(response) && Array.isArray(response.orders)) {
-      return response.orders as unknown as ApiAvailableOrder[];
+    const orders = normalizeOrderList<ApiAvailableOrder>(response, [
+      'orders',
+      'availableOrders',
+      'data',
+    ]);
+    if (orders) {
+      return orders;
     }
     throw new Error('Réponse invalide lors du chargement des offres.');
   }

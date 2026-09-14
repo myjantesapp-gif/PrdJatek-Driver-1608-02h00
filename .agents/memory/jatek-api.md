@@ -39,10 +39,17 @@ Base URL: `https://ma.jatek.app`
 
 ## Driver record (userId=310, driverId=4) / (userId=314, driverId=5)
 - Login maps userId → driverId via `GET /api/drivers` (find by `d.userId === userId`)
-- Order status values (API→app): pending/assigned→incoming, accepted→accepted, at_restaurant/ready_for_pickup→at_restaurant, picked_up→picked_up, delivering/in_progress/out_for_delivery→delivering, delivered/completed→completed
+- Order status values (API→app): pending/assigned/ready/ready_for_pickup→incoming, accepted→accepted, at_restaurant→at_restaurant, picked_up→picked_up, delivering/in_progress/out_for_delivery→delivering, delivered/completed→completed
 
 **Why:** No auto-discovery endpoint; driver ID must be resolved via the list after login. Available orders use a completely different endpoint and schema from assigned orders.
 **How to apply:** Always poll BOTH `/api/orders` (assigned) AND `/api/orders/available` (pickup queue). Map available orders with `mapAvailableOrder()`, not `mapApiOrder()`.
+
+## List response tolerance
+- Order lists may be returned as a raw array or wrapped under `orders`, `availableOrders`, or `data`; order IDs may be JSON strings.
+
+**Why:** The mobile client has encountered loosely typed and wrapped JSON responses; treating a valid response as empty makes ready offers disappear.
+
+**How to apply:** Normalize the list envelope, numeric ID, and status before comparing IDs or filtering `ready` offers.
 
 ## Status mutation response
 - Status mutation consumers should reconcile with `GET /api/orders/:id` when `PATCH /api/orders/:id/status` returns an empty body or a wrapper such as `{order: ...}`. Do not treat the mutation as failed solely because its response is not a flat order.

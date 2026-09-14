@@ -138,10 +138,11 @@ describe('order detail terminal controls', () => {
     expect(getNextDeliveryStatus('delivering')).toBe(null);
   });
 
-  it('only treats ready as an incoming pickup offer', () => {
+  it('treats ready variants as incoming pickup offers', () => {
     expect(isReadyForPickupStatus('ready')).toBe(true);
     expect(isReadyForPickupStatus(' READY ')).toBe(true);
-    expect(isReadyForPickupStatus('ready-for-pickup')).toBe(false);
+    expect(isReadyForPickupStatus('ready-for-pickup')).toBe(true);
+    expect(mapApiStatus('ready-for-pickup')).toBe('incoming');
     expect(isReadyForPickupStatus('accepted')).toBe(false);
     expect(isReadyForPickupStatus('picked_up')).toBe(false);
     expect(isReadyForPickupStatus('delivered')).toBe(false);

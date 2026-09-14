@@ -21,6 +21,7 @@ export function mapApiStatus(apiStatus: string): DeliveryStatus | null {
     case 'pending':
     case 'assigned':
     case 'ready':
+    case 'ready_for_pickup':
       return 'incoming';
     case 'accepted':
       return 'accepted';
@@ -50,7 +51,7 @@ export function mapApiStatus(apiStatus: string): DeliveryStatus | null {
 
 export function isReadyForPickupStatus(apiStatus?: string): boolean {
   const normalized = apiStatus?.trim().toLowerCase().replace(/[\s-]+/g, '_') ?? '';
-  return normalized === 'ready';
+  return normalized === 'ready' || normalized === 'ready_for_pickup';
 }
 
 export function isAllowedStatusTransition(from: DeliveryStatus, to: DeliveryStatus) {
