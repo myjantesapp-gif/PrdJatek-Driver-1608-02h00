@@ -93,3 +93,6 @@ iOSInjectionProject/
 
 expo-env.d.ts
 # @end expo-cli
+
+# Expo local device history and development server state
+.expo/
