@@ -22,13 +22,14 @@ function RootNavigator() {
   useEffect(() => {
     if (isLoading) return;
 
-    const inLogin = segments[0] === 'login';
+    const authRoutes = ['login', 'register', 'forgot-password'];
+    const inAuth = authRoutes.includes(String(segments[0] ?? ''));
 
-    if (user && inLogin) {
-      // Authenticated and still on login screen — send to tabs
+    if (user && inAuth) {
+      // Authenticated and still on a public auth screen — send to tabs
       router.replace('/(tabs)');
-    } else if (!user && !inLogin) {
-      // Not authenticated and not already on login
+    } else if (!user && !inAuth) {
+      // Not authenticated and not already on a public auth screen
       router.replace('/login');
     }
     // All other cases: authenticated user on any non-login route (tabs, order detail,
@@ -42,6 +43,14 @@ function RootNavigator() {
       <StatusBar style="light" />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="login" />
+        <Stack.Screen
+          name="register"
+          options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+        />
+        <Stack.Screen
+          name="forgot-password"
+          options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+        />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen
           name="complete-profile"

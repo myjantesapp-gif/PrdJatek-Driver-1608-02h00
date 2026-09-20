@@ -18,6 +18,29 @@ export interface LoginResponse {
   };
 }
 
+export interface AuthOtpResponse {
+  success?: boolean;
+  channel?: string;
+  message?: string;
+  otpSent?: boolean;
+}
+
+export interface VerifyOtpResponse extends LoginResponse {
+  isNewUser?: boolean;
+}
+
+export interface DriverRegistrationData {
+  name: string;
+  phone: string;
+  email: string;
+  password: string;
+  code: string;
+  vehicleType: string;
+  vehiclePlate: string;
+  nationalId: string;
+  licenseNumber?: string;
+}
+
 export interface ApiDriverProfile {
   id: number;
   userId: number;
@@ -348,6 +371,56 @@ class JatekApi {
     return this.request<LoginResponse>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+    });
+  }
+
+  async sendAuthOtp(identifier: { email?: string; phone?: string }): Promise<AuthOtpResponse> {
+    const email = identifier.email?.trim().toLowerCase();
+    const phone = identifier.phone?.trim();
+    if (!email && !phone) {
+      throw new Error('Saisissez un e-mail ou un numéro de téléphone.');
+    }
+    return this.request<AuthOtpResponse>('/api/auth/send-otp', {
+      method: 'POST',
+      body: JSON.stringify(phone ? { phone } : { email }),
+    });
+  }
+
+  async verifyAuthOtp(payload: {
+    phone: string;
+    code: string;
+    intent: 'signup' | 'login';
+    name?: string;
+    email?: string;
+    password?: string;
+    role?: 'driver';
+  }): Promise<VerifyOtpResponse> {
+    return this.request<VerifyOtpResponse>('/api/auth/verify-otp', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...payload,
+        phone: payload.phone.trim(),
+        code: payload.code.trim(),
+        email: payload.email?.trim().toLowerCase(),
+      }),
+    });
+  }
+
+  async requestPasswordReset(email: string): Promise<AuthOtpResponse> {
+    return this.request<AuthOtpResponse>('/api/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email: email.trim().toLowerCase() }),
+    });
+  }
+
+  async resetPassword(email: string, code: string, newPassword: string): Promise<AuthOtpResponse> {
+    return this.request<AuthOtpResponse>('/api/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: email.trim().toLowerCase(),
+        code: code.trim(),
+        newPassword,
+      }),
     });
   }
 

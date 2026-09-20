@@ -7,11 +7,13 @@ import {
   clearActiveOrderSnapshot,
   LoginResponse,
   ApiError,
+  DriverRegistrationData,
 } from '@/lib/api';
 
 interface AuthUser {
   userId: number;
   driverId: number;
+  role: string;
   name: string;
   email: string;
   phone: string;
@@ -21,10 +23,15 @@ interface AuthContextType {
   user: AuthUser | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
+  registerDriver: (data: DriverRegistrationData) => Promise<void>;
   logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
+
+function isDriverRole(role: unknown): boolean {
+  return typeof role === 'string' && role.trim().toLowerCase() === 'driver';
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -51,6 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               setUser({
                 userId: saved.userId,
                 driverId: myDriver.id,
+                role: 'driver',
                 name: myDriver.name,
                 email: '',
                 phone: myDriver.phone,
@@ -95,6 +103,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const res: LoginResponse = await api.login(email, password);
 
+    if (!isDriverRole(res.user.role)) {
+      api.setToken(null);
+      throw new Error('Ce compte n’a pas le rôle livreur.');
+    }
+
     // Set token immediately so authenticated requests (listDrivers) work
     if (sessionVersionRef.current !== sessionVersion) return;
     api.setToken(res.token);
@@ -124,10 +137,77 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser({
       userId: res.user.id,
       driverId: myDriver.id,
+      role: res.user.role,
       name: myDriver.name,
       email: res.user.email,
       phone: myDriver.phone,
     });
+  }, []);
+
+  const registerDriver = useCallback(async (data: DriverRegistrationData) => {
+    const version = ++loginVersionRef.current;
+    const sessionVersion = ++sessionVersionRef.current;
+
+    await clearAuth();
+    api.setToken(null);
+
+    const res = await api.verifyAuthOtp({
+      phone: data.phone,
+      code: data.code,
+      intent: 'signup',
+      name: data.name,
+      email: data.email,
+      password: data.password,
+      role: 'driver',
+    });
+
+    if (!isDriverRole(res.user.role)) {
+      throw new Error('L’API n’a pas créé un compte avec le rôle driver.');
+    }
+    if (
+      loginVersionRef.current !== version ||
+      sessionVersionRef.current !== sessionVersion
+    ) {
+      return;
+    }
+
+    api.setToken(res.token);
+    try {
+      const myDriver = await api.getCurrentDriver();
+      if (
+        !myDriver ||
+        (myDriver.userId && Number(myDriver.userId) !== Number(res.user.id))
+      ) {
+        throw new Error('Le profil driver distant n’a pas été créé pour ce compte.');
+      }
+
+      await api.completeDriverProfile(myDriver.id, {
+        vehicleType: data.vehicleType,
+        vehiclePlate: data.vehiclePlate,
+        nationalId: data.nationalId,
+        licenseNumber: data.licenseNumber?.trim() || undefined,
+      });
+
+      if (
+        loginVersionRef.current !== version ||
+        sessionVersionRef.current !== sessionVersion
+      ) {
+        return;
+      }
+      await saveAuth(res.token, res.user.id, myDriver.id);
+      setUser({
+        userId: res.user.id,
+        driverId: myDriver.id,
+        role: res.user.role,
+        name: myDriver.name || res.user.name,
+        email: res.user.email,
+        phone: myDriver.phone || res.user.phone,
+      });
+    } catch (error) {
+      api.setToken(null);
+      await clearAuth();
+      throw error;
+    }
   }, []);
 
   const logout = useCallback(async () => {
@@ -142,7 +222,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user]);
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, login, registerDriver, logout }}>
       {children}
     </AuthContext.Provider>
   );

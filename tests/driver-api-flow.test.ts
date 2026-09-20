@@ -156,6 +156,90 @@ describe('documented driver API flow', () => {
     );
   });
 
+  it('uses the remote OTP flow for driver signup', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({
+        success: true,
+        channel: 'whatsapp',
+        message: 'OTP envoyé',
+        otpSent: true,
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        token: 'signup-token',
+        user: {
+          id: 42,
+          name: 'Ahmed Livreur',
+          email: 'driver@example.com',
+          role: 'driver',
+        },
+        isNewUser: true,
+      }));
+
+    await expect(api.sendAuthOtp({ phone: ' +212600000000 ' })).resolves.toMatchObject({
+      otpSent: true,
+    });
+    await expect(api.verifyAuthOtp({
+      phone: ' +212600000000 ',
+      code: '123456',
+      intent: 'signup',
+      name: 'Ahmed Livreur',
+      email: 'DRIVER@example.com',
+      password: 'password123',
+      role: 'driver',
+    })).resolves.toMatchObject({
+      token: 'signup-token',
+      user: { role: 'driver' },
+    });
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://ma.jatek.app/api/auth/send-otp',
+      'https://ma.jatek.app/api/auth/verify-otp',
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      phone: '+212600000000',
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      phone: '+212600000000',
+      code: '123456',
+      intent: 'signup',
+      name: 'Ahmed Livreur',
+      email: 'driver@example.com',
+      password: 'password123',
+      role: 'driver',
+    });
+  });
+
+  it('uses the remote email reset flow for forgotten passwords', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({
+        success: true,
+        message: 'Si un compte est associé à cet email, un code a été envoyé.',
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        success: true,
+        message: 'Mot de passe réinitialisé',
+      }));
+
+    await expect(api.requestPasswordReset(' DRIVER@example.com ')).resolves.toMatchObject({
+      success: true,
+    });
+    await expect(api.resetPassword(' DRIVER@example.com ', '123456', 'password123'))
+      .resolves.toMatchObject({ success: true });
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://ma.jatek.app/api/auth/forgot-password',
+      'https://ma.jatek.app/api/auth/reset-password',
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      email: 'driver@example.com',
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      email: 'driver@example.com',
+      code: '123456',
+      newPassword: 'password123',
+    });
+  });
+
   it('reconciles status after an empty or wrapped status response', async () => {
     const updatedOrder = {
       id: 103,
