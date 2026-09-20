@@ -382,6 +382,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const isConfirmingDeliveryRef = useRef(false);
   /** Stable ref to latest activeOrder — read inside notification listener without stale closure */
   const activeOrderRef = useRef<Order | null>(null);
+  /** A cold-start notification can resolve before the persisted order is validated. */
+  const pendingNotificationResponseRef =
+    useRef<ExpoNotifications.NotificationResponse | null>(null);
+  const notificationResponseHandlerRef =
+    useRef<((response: ExpoNotifications.NotificationResponse) => void) | null>(null);
   /**
    * Storage writes must be serialized. Otherwise an older transition snapshot
    * can finish after a terminal clear and resurrect a completed delivery.
@@ -452,6 +457,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     profileAvailabilityRef.current = null;
 
     activeOrderRef.current = null;
+    pendingNotificationResponseRef.current = null;
     setActiveOrder(null);
     setTerminalOrder(null);
     if (!driverId) {
@@ -525,11 +531,21 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           setStatusState(nextStatus);
         }
         activeOrderHydratedRef.current = true;
+        const pendingNotificationResponse = pendingNotificationResponseRef.current;
+        pendingNotificationResponseRef.current = null;
+        if (pendingNotificationResponse) {
+          notificationResponseHandlerRef.current?.(pendingNotificationResponse);
+        }
         pollOrdersRef.current();
       } catch (err) {
         if (cancelled) return;
         console.warn('[DriverContext] active order restore failed:', err);
         activeOrderHydratedRef.current = true;
+        const pendingNotificationResponse = pendingNotificationResponseRef.current;
+        pendingNotificationResponseRef.current = null;
+        if (pendingNotificationResponse) {
+          notificationResponseHandlerRef.current?.(pendingNotificationResponse);
+        }
         pollOrdersRef.current();
       }
     })();
@@ -642,6 +658,10 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
     // Shared routing logic for both cold-start and foreground/background taps
     const handleNotificationResponse = (response: ExpoNotifications.NotificationResponse) => {
+      if (!activeOrderHydratedRef.current) {
+        pendingNotificationResponseRef.current = response;
+        return;
+      }
       const data = (response.notification.request.content.data ?? null) as Record<string, unknown> | null;
       const orderId = data?.orderId ? String(data.orderId) : null;
 
@@ -654,6 +674,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         router.push('/(tabs)');
       }
     };
+    notificationResponseHandlerRef.current = handleNotificationResponse;
 
     // Handle cold-start: app launched from a terminated state by tapping a notification.
     // getLastNotificationResponse returns the tap that launched the app (once only).
@@ -663,7 +684,12 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
     // Handle foreground / background taps while the JS runtime is already alive.
     const subscription = addNotificationResponseListener(handleNotificationResponse);
-    return () => subscription.remove();
+    return () => {
+      subscription.remove();
+      if (notificationResponseHandlerRef.current === handleNotificationResponse) {
+        notificationResponseHandlerRef.current = null;
+      }
+    };
   }, [driverId]);
 
   // ── Persist & sync status ────────────────────────────────────────────────────

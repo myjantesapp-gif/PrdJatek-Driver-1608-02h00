@@ -8,6 +8,7 @@ const notifications = vi.hoisted(() => ({
   getPermissionsAsync: vi.fn(),
   requestPermissionsAsync: vi.fn(),
   getExpoPushTokenAsync: vi.fn(),
+  scheduleNotificationAsync: vi.fn(),
 }));
 
 vi.mock('react-native', () => ({
@@ -31,6 +32,7 @@ vi.mock('expo-constants', () => ({
 import {
   configureNotifications,
   getExpoPushToken,
+  notifyNewOrder,
   ORDERS_NOTIFICATION_CHANNEL_ID,
 } from '../lib/notifications';
 
@@ -43,6 +45,7 @@ describe('native push notification setup', () => {
     notifications.getExpoPushTokenAsync.mockResolvedValue({
       data: ' ExponentPushToken[real-device-token] ',
     });
+    notifications.scheduleNotificationAsync.mockResolvedValue({ identifier: 'notification-1' });
   });
 
   it('creates the visible high-importance Commandes channel and asks only once', async () => {
@@ -83,6 +86,26 @@ describe('native push notification setup', () => {
     );
     expect(notifications.getExpoPushTokenAsync).toHaveBeenCalledWith({
       projectId: 'test-project-id',
+    });
+  });
+
+  it('publishes a new-order alert with the Android channel and tap payload', async () => {
+    notifications.getPermissionsAsync.mockResolvedValue({ status: 'granted' });
+
+    await expect(notifyNewOrder({
+      restaurantName: 'Pizza Oujda',
+      earnings: 4.5,
+      orderId: 103,
+    })).resolves.toBeUndefined();
+
+    expect(notifications.scheduleNotificationAsync).toHaveBeenCalledWith({
+      content: expect.objectContaining({
+        title: 'Nouvelle commande disponible',
+        body: 'Pizza Oujda · 4.50 €',
+        channelId: ORDERS_NOTIFICATION_CHANNEL_ID,
+        data: { type: 'new_order', orderId: 103 },
+      }),
+      trigger: null,
     });
   });
 });
