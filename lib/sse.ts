@@ -1,4 +1,4 @@
-import { BASE_URL } from './api';
+import { getApiBaseUrl } from './api';
 
 export type SseEvent = {
   type: string;
@@ -109,7 +109,7 @@ export class JatekSse {
 
     xhr.open(
       'GET',
-      `${BASE_URL}/api/events?channels=${encodeURIComponent(this.channels.join(','))}`,
+      `${getApiBaseUrl()}/api/events?channels=${encodeURIComponent(this.channels.join(','))}`,
       true,
     );
     xhr.setRequestHeader('Authorization', `Bearer ${token}`);

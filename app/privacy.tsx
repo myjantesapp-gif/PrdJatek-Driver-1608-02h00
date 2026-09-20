@@ -21,14 +21,14 @@ export default function PrivacyScreen() {
           de vos notifications.
         </Section>
         <Section title="Position">
-          La position est envoyée exclusivement au backend distant ma.jatek.app afin de permettre le
+          La position est envoyée exclusivement à l’API distante Jatek afin de permettre le
           suivi des livraisons et la coordination des commandes. Elle n’est pas vendue ni utilisée à
           des fins publicitaires.
         </Section>
         <Section title="Notifications">
           Les notifications servent à vous avertir des nouvelles commandes et des changements
           importants liés à vos livraisons. Vous pouvez gérer l’autorisation dans les réglages de votre
-          téléphone. Les commandes live restent synchronisées avec ma.jatek.app lorsque vous êtes connecté.
+          téléphone. Les commandes live restent synchronisées avec l’API Jatek lorsque vous êtes connecté.
         </Section>
         <Section title="Sécurité et conservation">
           Les échanges avec le backend utilisent HTTPS. Votre session est conservée localement pour

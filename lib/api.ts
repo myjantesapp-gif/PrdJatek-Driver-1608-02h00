@@ -1,6 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export const BASE_URL = 'https://ma.jatek.app';
+export const API_BASE_URLS = [
+  'https://api.jatek.app',
+  'https://ma.jatek.app',
+] as const;
+
+export const BASE_URL = API_BASE_URLS[0];
+let activeBaseUrl: string = BASE_URL;
+
+/** The last API origin that answered successfully. */
+export function getApiBaseUrl(): string {
+  return activeBaseUrl;
+}
 
 // ─── Response types ───────────────────────────────────────────────────────────
 
@@ -308,19 +319,38 @@ class JatekApi {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
 
-    // Abort after 20 s so requests never hang forever
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20_000);
+    let res: Response | null = null;
+    let lastNetworkError: unknown = null;
+    const candidateBaseUrls = [
+      activeBaseUrl,
+      ...API_BASE_URLS.filter((baseUrl) => baseUrl !== activeBaseUrl),
+    ];
 
-    let res: Response;
-    try {
-      res = await fetch(`${BASE_URL}${path}`, {
-        ...options,
-        headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeoutId);
+    for (const baseUrl of candidateBaseUrls) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20_000);
+      try {
+        res = await fetch(`${baseUrl}${path}`, {
+          ...options,
+          headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
+          signal: controller.signal,
+        });
+        activeBaseUrl = baseUrl;
+        break;
+      } catch (error) {
+        lastNetworkError = error;
+        if (baseUrl !== candidateBaseUrls[candidateBaseUrls.length - 1]) {
+          console.warn(`[JatekApi] ${baseUrl} indisponible, bascule vers le domaine de secours.`);
+        }
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    if (!res) {
+      throw lastNetworkError instanceof Error
+        ? lastNetworkError
+        : new Error('Impossible de joindre l’API Jatek.');
     }
 
     if (!expectJson) {
