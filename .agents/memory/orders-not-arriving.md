@@ -88,3 +88,11 @@ description: Three bugs that caused drivers to stop receiving order alerts on th
 **Why:** The fallback poll runs every three seconds. Removing the ID while the API still returns the same ready order re-queues it and schedules another native notification, producing a visible Android notification loop.
 
 **How to apply:** Clear suppression only after the order disappears from the authoritative available-order snapshot. Keep notification scheduling outside React state updater callbacks because those callbacks may be invoked more than once in development.
+
+## Available-order ownership fields
+
+**Rule:** Treat `driverId: null` and `assignedDriverId: null` as unassigned; only a positive concrete driver ID proves ownership.
+
+**Why:** The detail endpoint includes nullable ownership fields on available orders. Checking only whether a field exists incorrectly classified every available offer as belonging to another driver, so the in-app offer disappeared immediately.
+
+**How to apply:** Use concrete-ID checks when validating offer ownership, and allow incoming status variants such as `pending`/`assigned` when enriching an available-order response.

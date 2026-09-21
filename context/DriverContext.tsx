@@ -145,6 +145,18 @@ function sameOrderId(value: unknown, orderId: number) {
   return Number(value) === orderId;
 }
 
+function hasConcreteDriverOwnership(value: {
+  driverId?: unknown;
+  assignedDriverId?: unknown;
+}) {
+  return [value.driverId, value.assignedDriverId].some((candidate) => (
+    candidate !== null &&
+    candidate !== undefined &&
+    Number.isFinite(Number(candidate)) &&
+    Number(candidate) > 0
+  ));
+}
+
 /**
  * Status responses sometimes omit relational fields. Keep the existing order
  * details unless the server explicitly supplies a non-empty replacement.
@@ -488,8 +500,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           try {
             const remoteOrder = await api.getOrder(savedOrder.apiId);
             const remoteStatus = mapApiStatus(remoteOrder.status);
-            const hasOwnershipFields =
-              'driverId' in remoteOrder || 'assignedDriverId' in remoteOrder;
+            const hasOwnershipFields = hasConcreteDriverOwnership(remoteOrder);
             const belongsToDriver =
               sameDriverId(remoteOrder.driverId, driverId) ||
               sameDriverId(remoteOrder.assignedDriverId, driverId);
@@ -901,13 +912,15 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         setIncomingOrder(cachedEnriched);
       } else if (driverId) {
         api.getOrder(order.apiId).then((full) => {
-          const fullStatusIsReady = isReadyForPickupStatus(full.status);
-          const hasOwnershipFields =
-            'driverId' in full || 'assignedDriverId' in full;
+          const fullStatusIsReady =
+            isReadyForPickupStatus(full.status) ||
+            mapApiStatus(full.status) === 'incoming';
+          const hasOwnershipFields = hasConcreteDriverOwnership(full);
           const belongsToDriver =
             sameDriverId(full.driverId, driverId) ||
             sameDriverId(full.assignedDriverId, driverId);
-          if (fullStatusIsReady && (!hasOwnershipFields || belongsToDriver)) {
+          const belongsToAnotherDriver = hasOwnershipFields && !belongsToDriver;
+          if (fullStatusIsReady && !belongsToAnotherDriver) {
             const enriched = mapApiOrder(full, driverId);
             const withIncoming = { ...enriched, status: 'incoming' as const };
             enrichedOrderCache.current.set(order.apiId, withIncoming);
@@ -915,7 +928,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
             setIncomingOrder((current) =>
               current?.apiId === order.apiId ? withIncoming : current,
             );
-          } else {
+          } else if (belongsToAnotherDriver) {
             discardStaleOffer(order.apiId);
             advanceQueueRef.current();
           }
@@ -1219,6 +1232,17 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         const pendingAssigned = myOrders.filter((o) =>
           isReadyForPickupStatus(o.status),
         );
+        // Keep this authoritative set separate from allIncoming. A timed-out
+        // offer is intentionally excluded from the visible queue, but it must
+        // remain in the seen set while the API still advertises it. Otherwise
+        // the next 3-second poll treats the same offer as new and schedules
+        // another native notification.
+        const authoritativeIncomingIds = new Set([
+          ...pendingAssigned.map((o) => o.id),
+          ...available
+            .filter((o) => isReadyForPickupStatus(o.status))
+            .map((o) => o.id),
+        ]);
         const allIncoming = [
           ...pendingAssigned.map((o) => o.id),
           ...available
@@ -1235,7 +1259,10 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           readyIncomingIds.has(id),
         );
         seenOrderIds.current.forEach((id) => {
-          if (!readyIncomingIds.has(id)) seenOrderIds.current.delete(id);
+          // A suppressed offer is still authoritative while it remains in
+          // the API response. Only forget it after the backend removes it,
+          // so a later reappearance can be notified as a genuinely new offer.
+          if (!authoritativeIncomingIds.has(id)) seenOrderIds.current.delete(id);
         });
         setIncomingOrder((currentIncoming) => {
           if (!currentIncoming || readyIncomingIds.has(currentIncoming.apiId)) {
@@ -1258,20 +1285,22 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
             // Pre-fetch full order details so coordinates are ready when alert shows
             if (!enrichedOrderCache.current.has(id) && driverId) {
               api.getOrder(id).then((full) => {
-                const fullStatusIsReady = isReadyForPickupStatus(full.status);
-                const hasOwnershipFields =
-                  'driverId' in full || 'assignedDriverId' in full;
+                const fullStatusIsReady =
+                  isReadyForPickupStatus(full.status) ||
+                  mapApiStatus(full.status) === 'incoming';
+                const hasOwnershipFields = hasConcreteDriverOwnership(full);
                 const belongsToDriver =
                   sameDriverId(full.driverId, driverId) ||
                   sameDriverId(full.assignedDriverId, driverId);
-                if (fullStatusIsReady && (!hasOwnershipFields || belongsToDriver)) {
+                const belongsToAnotherDriver = hasOwnershipFields && !belongsToDriver;
+                if (fullStatusIsReady && !belongsToAnotherDriver) {
                   const mapped = mapApiOrder(full, driverId);
                   enrichedOrderCache.current.set(id, { ...mapped, status: 'incoming' });
                   // If this order is currently being displayed, update it live
                   setIncomingOrder((current) =>
                     current?.apiId === id ? { ...mapped, status: 'incoming' } : current,
                   );
-                } else {
+                } else if (belongsToAnotherDriver) {
                   discardStaleOffer(id);
                   advanceQueueRef.current();
                 }
@@ -1498,8 +1527,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       try {
         const remoteOrder = await api.getOrder(orderToAccept.apiId);
         const mappedRemote = mapApiOrder(remoteOrder, driverId);
-        const hasOwnershipFields =
-          'driverId' in remoteOrder || 'assignedDriverId' in remoteOrder;
+        const hasOwnershipFields = hasConcreteDriverOwnership(remoteOrder);
         const belongsToDriver =
           sameDriverId(remoteOrder.driverId, driverId) ||
           sameDriverId(remoteOrder.assignedDriverId, driverId);
@@ -1656,8 +1684,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     if (!currentOrder || currentOrder.id !== id) {
       try {
         const remoteOrder = await api.getOrder(orderId);
-        const hasOwnershipFields =
-          'driverId' in remoteOrder || 'assignedDriverId' in remoteOrder;
+        const hasOwnershipFields = hasConcreteDriverOwnership(remoteOrder);
         const belongsToDriver =
           sameDriverId(remoteOrder.driverId, driverId) ||
           sameDriverId(remoteOrder.assignedDriverId, driverId);
