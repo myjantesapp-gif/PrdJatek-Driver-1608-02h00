@@ -35,7 +35,7 @@ describe('documented driver API flow', () => {
 
     await expect(api.getAvailableOrders()).resolves.toEqual(orders);
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://ma.jatek.app/api/orders/available',
+      'https://api.jatek.app/api/orders/available',
       expect.objectContaining({
         headers: { 'Content-Type': 'application/json' },
       }),
@@ -82,9 +82,9 @@ describe('documented driver API flow', () => {
     await expect(api.confirmDelivery(103, '7364')).resolves.toMatchObject(deliveredOrder);
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      'https://ma.jatek.app/api/orders/103/accept-delivery',
-      'https://ma.jatek.app/api/orders/103/status',
-      'https://ma.jatek.app/api/orders/103/confirm-delivery',
+      'https://api.jatek.app/api/orders/103/accept-delivery',
+      'https://api.jatek.app/api/orders/103/status',
+      'https://api.jatek.app/api/orders/103/confirm-delivery',
     ]);
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ driverId: 7 });
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
@@ -109,8 +109,8 @@ describe('documented driver API flow', () => {
 
     await expect(api.acceptDelivery(103, 7)).resolves.toMatchObject(acceptedOrder);
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      'https://ma.jatek.app/api/orders/103/accept-delivery',
-      'https://ma.jatek.app/api/orders/103',
+      'https://api.jatek.app/api/orders/103/accept-delivery',
+      'https://api.jatek.app/api/orders/103',
     ]);
   });
 
@@ -121,7 +121,7 @@ describe('documented driver API flow', () => {
 
     await expect(api.getCurrentDriver()).resolves.toMatchObject(driver);
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://ma.jatek.app/api/drivers/me',
+      'https://api.jatek.app/api/drivers/me',
       expect.objectContaining({ headers: { 'Content-Type': 'application/json' } }),
     );
   });
@@ -144,7 +144,7 @@ describe('documented driver API flow', () => {
     await expect(api.registerPushToken(' ExponentPushToken[test] ')).resolves.toEqual({ ok: true });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://ma.jatek.app/api/drivers/me/push-token',
+      'https://api.jatek.app/api/drivers/me/push-token',
       expect.objectContaining({
         method: 'PATCH',
         headers: {
@@ -192,8 +192,8 @@ describe('documented driver API flow', () => {
     });
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      'https://ma.jatek.app/api/auth/send-otp',
-      'https://ma.jatek.app/api/auth/verify-otp',
+      'https://api.jatek.app/api/auth/send-otp',
+      'https://api.jatek.app/api/auth/verify-otp',
     ]);
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       phone: '+212600000000',
@@ -227,8 +227,8 @@ describe('documented driver API flow', () => {
       .resolves.toMatchObject({ success: true });
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      'https://ma.jatek.app/api/auth/forgot-password',
-      'https://ma.jatek.app/api/auth/reset-password',
+      'https://api.jatek.app/api/auth/forgot-password',
+      'https://api.jatek.app/api/auth/reset-password',
     ]);
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       email: 'driver@example.com',
@@ -259,9 +259,9 @@ describe('documented driver API flow', () => {
     });
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      'https://ma.jatek.app/api/orders/103/status',
-      'https://ma.jatek.app/api/orders/103',
-      'https://ma.jatek.app/api/orders/103/status',
+      'https://api.jatek.app/api/orders/103/status',
+      'https://api.jatek.app/api/orders/103',
+      'https://api.jatek.app/api/orders/103/status',
     ]);
   });
 });

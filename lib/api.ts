@@ -1,8 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const API_BASE_URLS = [
-  'https://ma.jatek.app',
   'https://api.jatek.app',
+  'https://ma.jatek.app',
 ] as const;
 
 export const BASE_URL = API_BASE_URLS[0];
