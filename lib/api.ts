@@ -348,7 +348,10 @@ class JatekApi {
     }
 
     if (!res) {
-      const browserMessage = typeof window !== 'undefined'
+      const isBrowserFetchFailure =
+        typeof window !== 'undefined' ||
+        (lastNetworkError instanceof TypeError && lastNetworkError.message === 'Failed to fetch');
+      const browserMessage = isBrowserFetchFailure
         ? 'Connexion impossible à l’API Jatek depuis ce navigateur. Le backend doit autoriser https://driver.jatek.app dans sa configuration CORS.'
         : 'Impossible de joindre l’API Jatek.';
       console.error('[JatekApi] Aucun domaine API accessible.', {

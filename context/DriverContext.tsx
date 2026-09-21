@@ -357,6 +357,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const fallbackPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollInFlightRef = useRef<Promise<void> | null>(null);
   const incomingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const incomingOrderRef = useRef<Order | null>(null);
   const lastAvailableOrdersRef = useRef<ApiAvailableOrder[]>([]);
   /** Pre-fetched full order data for available-queue entries (coordinates enriched). */
   const enrichedOrderCache = useRef<Map<number, Order>>(new Map());
@@ -875,6 +876,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const showOrderAlert = useCallback((order: Order) => {
+    incomingOrderRef.current = order;
     setIncomingOrder(order);
     notifyNewOrder({
       restaurantName: order.restaurant.name,
@@ -884,7 +886,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
     if (incomingTimerRef.current) clearTimeout(incomingTimerRef.current);
     incomingTimerRef.current = setTimeout(() => {
-      seenOrderIds.current.delete(order.apiId);
+      // Do not remove the order from seenOrderIds while the backend still
+      // advertises it. Otherwise the 3-second fallback poll schedules the
+      // same native notification again every time the alert expires.
+      suppressedOfferIds.current.add(order.apiId);
+      incomingOrderRef.current = null;
       advanceQueueRef.current();
     }, 25000);
 
@@ -928,9 +934,14 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     if (next) {
       showOrderAlert(next);
     } else {
+      incomingOrderRef.current = null;
       setIncomingOrder(null);
     }
   }, [popNextFromQueue, showOrderAlert]);
+
+  useEffect(() => {
+    incomingOrderRef.current = incomingOrder;
+  }, [incomingOrder]);
 
   useEffect(() => {
     advanceQueueRef.current = advanceQueue;
@@ -1274,13 +1285,12 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        if (enqueuedNew || pendingQueueRef.current.length > 0) {
-          setIncomingOrder((currentIncoming) => {
-            if (currentIncoming) return currentIncoming;
-            const next = popNextFromQueue(assigned, available);
-            if (next) showOrderAlert(next);
-            return next;
-          });
+        if (
+          (enqueuedNew || pendingQueueRef.current.length > 0) &&
+          !incomingOrderRef.current
+        ) {
+          const next = popNextFromQueue(assigned, available);
+          if (next) showOrderAlert(next);
         }
 
       }
@@ -1609,7 +1619,10 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const declineOrder = useCallback(() => {
     if (incomingTimerRef.current) clearTimeout(incomingTimerRef.current);
     if (incomingOrder) {
-      seenOrderIds.current.delete(incomingOrder.apiId);
+      // Keep this offer suppressed until the backend removes it. A stale
+      // available-order response must not trigger the same notification loop.
+      suppressedOfferIds.current.add(incomingOrder.apiId);
+      incomingOrderRef.current = null;
       enrichedOrderCache.current.delete(incomingOrder.apiId);
       api.updateOrderStatus(incomingOrder.apiId, 'rejected').catch(() => {});
     }
@@ -1619,7 +1632,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const dismissIncoming = useCallback(() => {
     if (incomingTimerRef.current) clearTimeout(incomingTimerRef.current);
     if (incomingOrder) {
-      seenOrderIds.current.delete(incomingOrder.apiId);
+      suppressedOfferIds.current.add(incomingOrder.apiId);
+      incomingOrderRef.current = null;
       enrichedOrderCache.current.delete(incomingOrder.apiId);
     }
     advanceQueueRef.current();

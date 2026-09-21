@@ -78,3 +78,13 @@ description: Three bugs that caused drivers to stop receiving order alerts on th
 **Why:** An empty, delayed, unknown, or unrelated order payload is not proof that the current delivery ended. Independent overlapping polls can also apply stale data after a newer request, while a network timeout may occur after the server has committed a transition.
 
 **How to apply:** Do not infer completion from an absent order or a different active order. Preserve the local delivery for uncertain responses, reconcile status errors against the shared poll, and surface explicit terminal server states to open detail views so retained refresh snapshots cannot show stale actions.
+
+---
+
+## Duplicate native notifications
+
+**Rule:** Keep an available order in the seen/suppressed sets while the backend still advertises it; do not delete its seen ID when an alert times out, is dismissed, or is declined.
+
+**Why:** The fallback poll runs every three seconds. Removing the ID while the API still returns the same ready order re-queues it and schedules another native notification, producing a visible Android notification loop.
+
+**How to apply:** Clear suppression only after the order disappears from the authoritative available-order snapshot. Keep notification scheduling outside React state updater callbacks because those callbacks may be invoked more than once in development.
