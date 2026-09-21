@@ -136,6 +136,17 @@ describe('documented driver API flow', () => {
     });
   });
 
+  it('explains the browser CORS requirement when both API origins are unreachable', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    await expect(api.login('driver@example.com', 'password123')).rejects.toMatchObject({
+      status: 0,
+      message: 'Connexion impossible à l’API Jatek depuis ce navigateur. Le backend doit autoriser https://driver.jatek.app dans sa configuration CORS.',
+    });
+  });
+
   it('registers the Expo token through the authenticated driver endpoint', async () => {
     api.setToken('test-token');
     const fetchMock = vi.spyOn(globalThis, 'fetch')

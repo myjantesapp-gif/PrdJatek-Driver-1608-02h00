@@ -348,9 +348,17 @@ class JatekApi {
     }
 
     if (!res) {
-      throw lastNetworkError instanceof Error
-        ? lastNetworkError
-        : new Error('Impossible de joindre l’API Jatek.');
+      const browserMessage = typeof window !== 'undefined'
+        ? 'Connexion impossible à l’API Jatek depuis ce navigateur. Le backend doit autoriser https://driver.jatek.app dans sa configuration CORS.'
+        : 'Impossible de joindre l’API Jatek.';
+      console.error('[JatekApi] Aucun domaine API accessible.', {
+        origins: candidateBaseUrls,
+        cause: lastNetworkError instanceof Error ? lastNetworkError.message : 'unknown',
+      });
+      throw new ApiError(browserMessage, 0, {
+        origins: candidateBaseUrls,
+        cause: lastNetworkError instanceof Error ? lastNetworkError.message : null,
+      });
     }
 
     if (!expectJson) {
