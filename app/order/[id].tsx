@@ -17,7 +17,11 @@ import * as Haptics from 'expo-haptics';
 import { Colors } from '@/constants/colors';
 import { useDriver } from '@/context/DriverContext';
 import { OTPInput } from '@/components/OTPInput';
-import { getNextDeliveryStatus, getNextOrderStatusLabel } from '@/lib/delivery-state';
+import {
+  getNavigationUrls,
+  getNextDeliveryStatus,
+  getNextOrderStatusLabel,
+} from '@/lib/delivery-state';
 
 const STEPS = [
   { key: 'accepted', label: 'Commande acceptée', icon: 'checkmark-circle-outline' as const },
@@ -193,16 +197,17 @@ export default function OrderDetailScreen() {
     ) {
       return;
     }
-    const nativeUrl = Platform.OS === 'ios'
-      ? `maps:0,0?q=Destination@${lat},${lng}`
-      : `geo:${lat},${lng}?q=${lat},${lng}`;
-    const fallbackUrl = `https://maps.google.com/?q=${encodeURIComponent(`${lat},${lng}`)}`;
+    const { nativeUrl, universalUrl } = getNavigationUrls(
+      Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web',
+      lat,
+      lng,
+    );
     try {
       const canOpenNative = await Linking.canOpenURL(nativeUrl);
-      await Linking.openURL(canOpenNative ? nativeUrl : fallbackUrl);
+      await Linking.openURL(canOpenNative ? nativeUrl : universalUrl);
     } catch {
       try {
-        await Linking.openURL(fallbackUrl);
+        await Linking.openURL(universalUrl);
       } catch {
         // No browser or maps app is available.
       }

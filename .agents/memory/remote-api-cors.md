@@ -1,10 +1,10 @@
 ---
-name: Remote API CORS
-description: Distinguishes native API connectivity from the browser-only CORS failure on the remote Jatek backend.
+name: Remote business API boundary
+description: Defines the exclusive Jatek business-data origin and the separate browser CORS requirement.
 ---
 
-**Rule:** Treat Android native connectivity and `driver.jatek.app` browser connectivity as separate paths. The native app calls `https://ma.jatek.app` directly, while the web app requires that backend to permit the web origin.
+**Rule:** All Jatek Driver business data must come exclusively from `https://api.jatek.app`. Do not add a fallback API origin, mock business records, or locally synthesize missing earnings, ratings, levels, statistics, or delivery estimates.
 
-**Why:** The remote login endpoint responds normally without an `Origin` header, but preflight and login requests carrying `Origin: https://driver.jatek.app` currently return a server error without CORS allow headers. This cannot be corrected in the static driver client.
+**Why:** Alternate origins and locally derived defaults can conflict with the authoritative backend and show drivers values the server never confirmed. Browser CORS remains a server-side concern and must not be bypassed with another domain.
 
-**How to apply:** Keep the native API base on `https://ma.jatek.app`. For web support, change the remote backend CORS configuration to accept `https://driver.jatek.app`, including OPTIONS and the Authorization/Content-Type headers.
+**How to apply:** Keep one business API base URL for HTTP, SSE, and Socket.IO. Treat AsyncStorage only as session/cache storage and validate cached order state remotely before display. Configure `api.jatek.app` to accept the web origin when browser support is required.

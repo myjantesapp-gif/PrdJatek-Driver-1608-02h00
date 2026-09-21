@@ -14,10 +14,6 @@ export function EarningsCard({ earnings, stats }: EarningsCardProps) {
     <View style={styles.card}>
       <View style={styles.header}>
         <Text style={styles.label}>Revenus aujourd'hui</Text>
-        <View style={styles.levelBadge}>
-          <Ionicons name="star" size={12} color={Colors.secondary} />
-          <Text style={styles.levelText}>{stats.level}</Text>
-        </View>
       </View>
 
       <Text style={styles.amount}>{earnings.today.toFixed(2)} €</Text>
@@ -29,8 +25,8 @@ export function EarningsCard({ earnings, stats }: EarningsCardProps) {
         </View>
         <View style={styles.divider} />
         <View style={styles.statCol}>
-          <Text style={styles.statValue}>{stats.kmToday} km</Text>
-          <Text style={styles.statLabel}>Parcourus</Text>
+          <Text style={styles.statValue}>{stats.deliveriesTotal}</Text>
+          <Text style={styles.statLabel}>Total</Text>
         </View>
         <View style={styles.divider} />
         <View style={styles.statCol}>

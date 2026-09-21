@@ -7,15 +7,19 @@ import {
   Platform,
   ActivityIndicator,
   Linking,
+  AppState,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import Constants from 'expo-constants';
 import * as Location from 'expo-location';
 import { Colors } from '@/constants/colors';
 import { useDriver } from '@/context/DriverContext';
 import { router } from 'expo-router';
-import { DEFAULT_MAP_REGION, getWebLocationFallback } from '@/lib/delivery-state';
+import {
+  DEFAULT_MAP_REGION,
+  getNavigationUrls,
+  shouldRefreshWebMapLocation,
+} from '@/lib/delivery-state';
 
 function MapPlaceholder({ message }: { message: string }) {
   return (
@@ -63,19 +67,37 @@ export default function MapScreen() {
   const [Marker, setMarker] = useState<any>(null);
   const [Polyline, setPolyline] = useState<any>(null);
   const [mapUnavailable, setMapUnavailable] = useState(false);
-  const hasAndroidMapsKey = Boolean(
-    Constants.expoConfig?.android?.config?.googleMaps?.apiKey,
-  );
-  const nativeMapSupported = Platform.OS !== 'android' || hasAndroidMapsKey;
+  const [locationRefreshKey, setLocationRefreshKey] = useState(0);
+  const lastWebLocationRef = useRef<{
+    latitude: number;
+    longitude: number;
+    updatedAt: number;
+  } | null>(null);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
 
   useEffect(() => {
-    let cancelled = false;
+    if (Platform.OS === 'web') return;
+    let previousState = AppState.currentState;
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (previousState !== 'active' && nextState === 'active') {
+        setLocationRefreshKey((key) => key + 1);
+      }
+      previousState = nextState;
+    });
+    return () => subscription.remove();
+  }, []);
 
-    if (Platform.OS === 'android' && !hasAndroidMapsKey) {
-      setMapUnavailable(true);
-    } else if (Platform.OS !== 'web') {
+  useEffect(() => {
+    let cancelled = false;
+    let webWatchId: number | null = null;
+    let nativeSubscription: Location.LocationSubscription | null = null;
+    let locationTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    setLoading(true);
+    setPermissionError(false);
+
+    if (Platform.OS !== 'web') {
       (async () => {
         try {
           const maps = await import('react-native-maps');
@@ -95,42 +117,54 @@ export default function MapScreen() {
     (async () => {
       try {
         if (Platform.OS === 'web') {
-          // Guard: navigator may be undefined in non-browser web environments
           if (typeof navigator === 'undefined' || !navigator.geolocation) {
             if (!cancelled) {
-              setLocation(getWebLocationFallback('unavailable'));
+              setPermissionError(true);
               setLoading(false);
             }
             return;
           }
-          const fallbackTimer = setTimeout(() => {
+          locationTimeout = setTimeout(() => {
             if (!cancelled) {
-              setLocation(getWebLocationFallback('timeout'));
+              setPermissionError(true);
               setLoading(false);
             }
           }, 12_000);
-          navigator.geolocation.getCurrentPosition(
+          webWatchId = navigator.geolocation.watchPosition(
             (pos) => {
-              clearTimeout(fallbackTimer);
+              if (locationTimeout) clearTimeout(locationTimeout);
               if (!cancelled) {
-                setLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+                const nextLocation = {
+                  latitude: pos.coords.latitude,
+                  longitude: pos.coords.longitude,
+                };
+                const previous = lastWebLocationRef.current;
+                const now = Date.now();
+                if (shouldRefreshWebMapLocation(previous, nextLocation, now)) {
+                  lastWebLocationRef.current = { ...nextLocation, updatedAt: now };
+                  setLocation(nextLocation);
+                }
+                setPermissionError(false);
                 setLoading(false);
               }
             },
             () => {
-              clearTimeout(fallbackTimer);
+              if (locationTimeout) clearTimeout(locationTimeout);
               if (!cancelled) {
-                setLocation(getWebLocationFallback('permission-denied'));
+                setPermissionError(true);
                 setLoading(false);
               }
             },
-            { enableHighAccuracy: true, maximumAge: 10_000, timeout: 12_000 },
+            { enableHighAccuracy: true, maximumAge: 5_000, timeout: 12_000 },
           );
           return;
         }
-        const { status: perm } = await Location.requestForegroundPermissionsAsync();
+        let permission = await Location.getForegroundPermissionsAsync();
+        if (!permission.granted && permission.canAskAgain) {
+          permission = await Location.requestForegroundPermissionsAsync();
+        }
         if (cancelled) return;
-        if (perm !== 'granted') {
+        if (!permission.granted) {
           setPermissionError(true);
           setLoading(false);
           return;
@@ -138,37 +172,73 @@ export default function MapScreen() {
         const loc = await Promise.race([
           Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
           new Promise<never>((_, reject) => {
-            setTimeout(() => reject(new Error('Location request timed out')), 12_000);
+            locationTimeout = setTimeout(
+              () => reject(new Error('Location request timed out')),
+              12_000,
+            );
           }),
         ]);
+        if (locationTimeout) {
+          clearTimeout(locationTimeout);
+          locationTimeout = null;
+        }
         if (!cancelled) {
           setLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+          setLoading(false);
+        }
+        if (cancelled) return;
+        const subscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            timeInterval: 5_000,
+            distanceInterval: 10,
+          },
+          (nextLocation) => {
+            if (!cancelled) {
+              setLocation({
+                latitude: nextLocation.coords.latitude,
+                longitude: nextLocation.coords.longitude,
+              });
+            }
+          },
+        );
+        if (cancelled) {
+          subscription.remove();
+        } else {
+          nativeSubscription = subscription;
         }
       } catch {
-        if (!cancelled) setLocation(getWebLocationFallback('timeout'));
+        if (!cancelled) setPermissionError(true);
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
 
-    return () => { cancelled = true; };
-  }, [hasAndroidMapsKey]);
+    return () => {
+      cancelled = true;
+      if (locationTimeout) clearTimeout(locationTimeout);
+      if (webWatchId !== null && typeof navigator !== 'undefined') {
+        navigator.geolocation.clearWatch(webWatchId);
+      }
+      nativeSubscription?.remove();
+    };
+  }, [locationRefreshKey]);
 
   const openNavigation = async (lat: number, lng: number, label: string) => {
     if (!hasNavigableCoordinates(lat, lng)) return;
 
-    const encodedLabel = encodeURIComponent(label || 'Destination');
-    const nativeUrl = Platform.OS === 'ios'
-      ? `maps:0,0?q=${encodedLabel}@${lat},${lng}`
-      : `geo:${lat},${lng}?q=${lat},${lng}(${encodedLabel})`;
-    const webUrl = `https://maps.google.com/?q=${encodeURIComponent(`${lat},${lng}`)}`;
+    const { nativeUrl, universalUrl } = getNavigationUrls(
+      Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web',
+      lat,
+      lng,
+    );
 
     try {
       const canOpenNative = await Linking.canOpenURL(nativeUrl);
-      await Linking.openURL(canOpenNative ? nativeUrl : webUrl);
+      await Linking.openURL(canOpenNative ? nativeUrl : universalUrl);
     } catch {
       try {
-        await Linking.openURL(webUrl);
+        await Linking.openURL(universalUrl);
       } catch {
         // There is no usable external maps application on this device.
       }
@@ -178,18 +248,48 @@ export default function MapScreen() {
   const mapRegion = location
     ? { ...location, latitudeDelta: 0.02, longitudeDelta: 0.02 }
     : DEFAULT_MAP_REGION;
+  const activeDestination = activeOrder
+    ? activeOrder.status === 'accepted' || activeOrder.status === 'at_restaurant'
+      ? activeOrder.restaurant
+      : activeOrder.customer
+    : null;
 
   const renderMap = () => {
     if (Platform.OS === 'web') {
+      const center = location ?? (
+        activeDestination && hasNavigableCoordinates(activeDestination.lat, activeDestination.lng)
+          ? { latitude: activeDestination.lat, longitude: activeDestination.lng }
+          : DEFAULT_MAP_REGION
+      );
+      const hasRoute = (
+        location &&
+        activeDestination &&
+        hasNavigableCoordinates(activeDestination.lat, activeDestination.lng)
+      );
+      const webMapUrl = hasRoute
+        ? `https://www.google.com/maps?saddr=${encodeURIComponent(
+            `${location.latitude},${location.longitude}`,
+          )}&daddr=${encodeURIComponent(
+            `${activeDestination.lat},${activeDestination.lng}`,
+          )}&dirflg=d&output=embed`
+        : `https://www.google.com/maps?q=${encodeURIComponent(
+            `${center.latitude},${center.longitude}`,
+          )}&z=15&output=embed`;
       return (
         <View style={styles.webMap}>
-          <Ionicons name="navigate-circle" size={64} color={Colors.primary} />
-          <Text style={styles.webMapTitle}>Navigation GPS</Text>
-          <Text style={styles.webMapSub}>
-            {location
-              ? `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}`
-              : 'Localisation en cours...'}
-          </Text>
+          {React.createElement('iframe' as any, {
+            src: webMapUrl,
+            title: 'Carte Google Maps',
+            style: {
+              width: '100%',
+              height: '100%',
+              border: 0,
+              display: 'block',
+            },
+            loading: 'eager',
+            allowFullScreen: true,
+            referrerPolicy: 'no-referrer-when-downgrade',
+          })}
         </View>
       );
     }
@@ -198,9 +298,7 @@ export default function MapScreen() {
         <MapPlaceholder
           message={
             mapUnavailable
-              ? nativeMapSupported
-                ? 'Carte indisponible sur cet appareil'
-                : 'Carte Android désactivée : configuration Google Maps manquante'
+              ? 'Carte indisponible sur cet appareil'
               : 'Chargement de la carte...'
           }
         />
@@ -231,14 +329,12 @@ export default function MapScreen() {
                   pinColor={Colors.tertiary}
                 />
               )}
-              {Polyline && location &&
-                hasNavigableCoordinates(activeOrder.restaurant.lat, activeOrder.restaurant.lng) &&
-                hasNavigableCoordinates(activeOrder.customer.lat, activeOrder.customer.lng) && (
+              {Polyline && location && activeDestination &&
+                hasNavigableCoordinates(activeDestination.lat, activeDestination.lng) && (
                   <Polyline
                     coordinates={[
                       { latitude: location.latitude, longitude: location.longitude },
-                      { latitude: activeOrder.restaurant.lat, longitude: activeOrder.restaurant.lng },
-                      { latitude: activeOrder.customer.lat, longitude: activeOrder.customer.lng },
+                      { latitude: activeDestination.lat, longitude: activeDestination.lng },
                     ]}
                     strokeColor={Colors.primary}
                     strokeWidth={3}
@@ -259,12 +355,6 @@ export default function MapScreen() {
           <ActivityIndicator size="large" color={Colors.primary} />
           <Text style={styles.loadingText}>Localisation en cours...</Text>
         </View>
-      ) : permissionError ? (
-        <View style={styles.errorContainer}>
-          <Ionicons name="location-outline" size={48} color={Colors.error} />
-          <Text style={styles.errorTitle}>Permission refusée</Text>
-          <Text style={styles.errorSub}>Autorisez la localisation pour utiliser la navigation</Text>
-        </View>
       ) : (
         <View style={styles.mapContainer}>
           {renderMap()}
@@ -277,6 +367,29 @@ export default function MapScreen() {
               </Text>
             </View>
           </View>
+
+          {permissionError && (
+            <View style={styles.locationWarning}>
+              <Ionicons name="location-outline" size={20} color={Colors.warning} />
+              <Text style={styles.locationWarningText}>
+                Position indisponible. Autorisez la localisation puis réessayez.
+              </Text>
+              <TouchableOpacity
+                style={styles.retryButton}
+                onPress={() => {
+                  if (Platform.OS !== 'web') {
+                    Linking.openSettings().catch(() => {});
+                  } else {
+                    setLocationRefreshKey((key) => key + 1);
+                  }
+                }}
+              >
+                <Text style={styles.retryButtonText}>
+                  {Platform.OS === 'web' ? 'Réessayer' : 'Réglages'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           {activeOrder && (
             <View style={[styles.orderOverlay, { paddingBottom: Platform.OS === 'web' ? 34 : insets.bottom + 100 }]}>
@@ -439,6 +552,38 @@ const styles = StyleSheet.create({
     color: Colors.text,
     fontSize: 13,
     fontFamily: 'Poppins_600SemiBold',
+  },
+  locationWarning: {
+    position: 'absolute',
+    top: 64,
+    left: 16,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
+    borderRadius: Colors.radius,
+    borderWidth: 1,
+    borderColor: Colors.warning + '60',
+    backgroundColor: Colors.card + 'F5',
+  },
+  locationWarningText: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: 12,
+    lineHeight: 17,
+    fontFamily: 'Poppins_500Medium',
+  },
+  retryButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: Colors.radiusSm,
+    backgroundColor: Colors.warning,
+  },
+  retryButtonText: {
+    color: '#000',
+    fontSize: 11,
+    fontFamily: 'Poppins_700Bold',
   },
   orderOverlay: {
     position: 'absolute',

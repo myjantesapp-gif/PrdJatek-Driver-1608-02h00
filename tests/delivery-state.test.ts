@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   getNextDeliveryStatus,
   getNextOrderStatusLabel,
+  getNavigationUrls,
   getWebLocationFallback,
   isReadyForPickupStatus,
   mapApiStatus,
   shouldRetainActiveDelivery,
   shouldRollbackOptimisticStatus,
+  shouldRefreshWebMapLocation,
 } from '../lib/delivery-state';
 
 describe('delivery polling retention', () => {
@@ -161,4 +163,34 @@ describe('web map location fallback', () => {
       });
     },
   );
+});
+
+describe('cross-platform navigation', () => {
+  it('builds turn-by-turn URLs for iOS, Android, and web', () => {
+    expect(getNavigationUrls('ios', 48.8566, 2.3522).nativeUrl)
+      .toBe('http://maps.apple.com/?daddr=48.8566%2C2.3522&dirflg=d');
+    expect(getNavigationUrls('android', 48.8566, 2.3522).nativeUrl)
+      .toBe('google.navigation:q=48.8566%2C2.3522&mode=d');
+    expect(getNavigationUrls('web', 48.8566, 2.3522).universalUrl)
+      .toContain('/maps/dir/?api=1&destination=48.8566%2C2.3522');
+  });
+
+  it('throttles tiny web GPS updates but refreshes material movement', () => {
+    const previous = { latitude: 48.8566, longitude: 2.3522, updatedAt: 1_000 };
+    expect(shouldRefreshWebMapLocation(
+      previous,
+      { latitude: 48.85661, longitude: 2.35221 },
+      10_000,
+    )).toBe(false);
+    expect(shouldRefreshWebMapLocation(
+      previous,
+      { latitude: 48.8572, longitude: 2.3522 },
+      10_000,
+    )).toBe(true);
+    expect(shouldRefreshWebMapLocation(
+      previous,
+      { latitude: 48.85661, longitude: 2.35221 },
+      31_000,
+    )).toBe(true);
+  });
 });

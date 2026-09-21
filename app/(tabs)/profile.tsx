@@ -44,13 +44,6 @@ function ProfileRow({ icon, label, value, color, onPress }: {
   return <View style={styles.row}>{inner}</View>;
 }
 
-const LEVEL_COLORS: Record<string, string> = {
-  Bronze: '#CD7F32',
-  Silver: '#C0C0C0',
-  Gold: Colors.secondary,
-  Platinum: Colors.tertiary,
-};
-
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const {
@@ -65,7 +58,6 @@ export default function ProfileScreen() {
   const { logout } = useAuth();
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : 0;
-  const levelColor = LEVEL_COLORS[stats.level] ?? Colors.secondary;
 
   const handleLogout = () => {
     Alert.alert(
@@ -95,10 +87,6 @@ export default function ProfileScreen() {
           <View style={styles.profileInfo}>
             <Text style={styles.profileName}>{profile.name}</Text>
             <Text style={styles.profileId}>ID: {profile.id}</Text>
-          </View>
-          <View style={[styles.levelBadge, { borderColor: levelColor + '50', backgroundColor: levelColor + '18' }]}>
-            <Ionicons name="star" size={13} color={levelColor} />
-            <Text style={[styles.levelText, { color: levelColor }]}>{stats.level}</Text>
           </View>
         </View>
 

@@ -153,6 +153,40 @@ export const DEFAULT_MAP_REGION = {
   longitudeDelta: 0.05,
 } as const;
 
+export interface MapCoordinates {
+  latitude: number;
+  longitude: number;
+}
+
+export function shouldRefreshWebMapLocation(
+  previous: (MapCoordinates & { updatedAt: number }) | null,
+  next: MapCoordinates,
+  now: number,
+) {
+  if (!previous) return true;
+  const movedMaterially = (
+    Math.abs(previous.latitude - next.latitude) > 0.00045 ||
+    Math.abs(previous.longitude - next.longitude) > 0.00045
+  );
+  return movedMaterially || now - previous.updatedAt >= 30_000;
+}
+
+export function getNavigationUrls(
+  platform: 'ios' | 'android' | 'web',
+  latitude: number,
+  longitude: number,
+) {
+  const destination = encodeURIComponent(`${latitude},${longitude}`);
+  const universalUrl =
+    `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=driving`;
+  const nativeUrl = platform === 'ios'
+    ? `http://maps.apple.com/?daddr=${destination}&dirflg=d`
+    : platform === 'android'
+      ? `google.navigation:q=${destination}&mode=d`
+      : universalUrl;
+  return { nativeUrl, universalUrl };
+}
+
 export type WebLocationFailure = 'unavailable' | 'permission-denied' | 'timeout';
 
 /**

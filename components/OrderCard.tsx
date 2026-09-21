@@ -41,7 +41,9 @@ export function OrderCard({ order, onPress, compact = false }: OrderCardProps) {
         <View style={styles.statDot} />
         <View style={styles.statItem}>
           <Ionicons name="time-outline" size={15} color={Colors.secondary} />
-          <Text style={styles.statText}>{order.estimatedDelivery} min</Text>
+          <Text style={styles.statText}>
+            {order.estimatedDelivery > 0 ? `${order.estimatedDelivery} min` : 'Indisponible'}
+          </Text>
         </View>
         <View style={styles.statDot} />
         <View style={styles.statItem}>

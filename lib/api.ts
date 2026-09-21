@@ -1,16 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export const API_BASE_URLS = [
-  'https://api.jatek.app',
-  'https://ma.jatek.app',
-] as const;
+export const BASE_URL = 'https://api.jatek.app';
 
-export const BASE_URL = API_BASE_URLS[0];
-let activeBaseUrl: string = BASE_URL;
-
-/** The last API origin that answered successfully. */
+/** The only origin authorized to serve Jatek Driver business data. */
 export function getApiBaseUrl(): string {
-  return activeBaseUrl;
+  return BASE_URL;
 }
 
 // ─── Response types ───────────────────────────────────────────────────────────
@@ -321,30 +315,18 @@ class JatekApi {
 
     let res: Response | null = null;
     let lastNetworkError: unknown = null;
-    const candidateBaseUrls = [
-      activeBaseUrl,
-      ...API_BASE_URLS.filter((baseUrl) => baseUrl !== activeBaseUrl),
-    ];
-
-    for (const baseUrl of candidateBaseUrls) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20_000);
-      try {
-        res = await fetch(`${baseUrl}${path}`, {
-          ...options,
-          headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
-          signal: controller.signal,
-        });
-        activeBaseUrl = baseUrl;
-        break;
-      } catch (error) {
-        lastNetworkError = error;
-        if (baseUrl !== candidateBaseUrls[candidateBaseUrls.length - 1]) {
-          console.warn(`[JatekApi] ${baseUrl} indisponible, bascule vers le domaine de secours.`);
-        }
-      } finally {
-        clearTimeout(timeoutId);
-      }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20_000);
+    try {
+      res = await fetch(`${BASE_URL}${path}`, {
+        ...options,
+        headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
+        signal: controller.signal,
+      });
+    } catch (error) {
+      lastNetworkError = error;
+    } finally {
+      clearTimeout(timeoutId);
     }
 
     if (!res) {
@@ -355,11 +337,11 @@ class JatekApi {
         ? 'Connexion impossible à l’API Jatek depuis ce navigateur. Le backend doit autoriser https://driver.jatek.app dans sa configuration CORS.'
         : 'Impossible de joindre l’API Jatek.';
       console.error('[JatekApi] Aucun domaine API accessible.', {
-        origins: candidateBaseUrls,
+        origin: BASE_URL,
         cause: lastNetworkError instanceof Error ? lastNetworkError.message : 'unknown',
       });
       throw new ApiError(browserMessage, 0, {
-        origins: candidateBaseUrls,
+        origin: BASE_URL,
         cause: lastNetworkError instanceof Error ? lastNetworkError.message : null,
       });
     }

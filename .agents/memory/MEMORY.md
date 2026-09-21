@@ -4,7 +4,7 @@
 - [Orders not arriving — root causes](orders-not-arriving.md) — 3 bugs: busy→online reset, SSE useEffect/pollOrdersRef, 401 infinite loop
 - [Expo web preview startup](expo-web-preview.md) — use offline production-preview mode when DevTools cannot load its Linux shell
 - [Android notification permissions](android-notification-permissions.md) — prompt only from the undetermined state; denied users must use system settings to re-enable alerts
-- [Remote API CORS](remote-api-cors.md) — native Android reaches ma.jatek.app directly; browser-origin requests from driver.jatek.app currently fail server-side
+- [Remote business API boundary](remote-api-cors.md) — all business data must use api.jatek.app; do not add alternate origins or synthesize missing server values
 - [Realtime transport boundary](realtime-transport.md) — current Jatek backend documents SSE only; Socket.IO needs a server endpoint before replacing the existing stream
 - [Android hardware validation](android-hardware-validation.md) — this Replit workspace has no Android SDK, adb, emulator, or connected device; real APK checks require external hardware
 - [Cold-start notification routing](notification-cold-start.md) — wait for server-validated snapshot hydration before routing a notification tap to an active order

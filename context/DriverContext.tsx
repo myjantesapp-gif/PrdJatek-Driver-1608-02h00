@@ -58,8 +58,6 @@ export interface DriverStats {
   deliveriesToday: number;
   deliveriesTotal: number;
   rating: number;
-  level: 'Bronze' | 'Silver' | 'Gold' | 'Platinum';
-  kmToday: number;
 }
 
 export interface DriverProfile {
@@ -189,13 +187,6 @@ function mergeOrderWithServer(local: Order, server: Order): Order {
   };
 }
 
-function getLevelFromDeliveries(total: number): DriverStats['level'] {
-  if (total >= 500) return 'Platinum';
-  if (total >= 200) return 'Gold';
-  if (total >= 50)  return 'Silver';
-  return 'Bronze';
-}
-
 // Convert available-order (GET /api/orders/available) to app Order format.
 // This endpoint returns a flat structure with different field names.
 function mapAvailableOrder(order: ApiAvailableOrder): Order {
@@ -205,34 +196,31 @@ function mapAvailableOrder(order: ApiAvailableOrder): Order {
     quantity: i.quantity,
     price: Number(i.unitPrice ?? i.price) || 0,
   }));
-  const subtotal = items.reduce((s, i) => s + i.price * i.quantity, 0);
-  const total = Number(order.total ?? order.subtotal) || subtotal;
   const deliveryFee = Number(order.deliveryFee) || 0;
-  const earnings = deliveryFee > 0 ? deliveryFee : parseFloat((total * 0.12).toFixed(2));
 
   return {
     id: String(order.id),
     apiId: order.id,
     reference: order.reference ?? `Commande #${order.id}`,
     restaurant: {
-      name: order.restaurantName ?? 'Restaurant',
+      name: order.restaurantName ?? '',
       address: '',
       phone: '',
       lat: 0,
       lng: 0,
     },
     customer: {
-      name: order.userName ?? 'Client',
+      name: order.userName ?? '',
       address: order.deliveryAddress ?? '',
       phone: '',
       lat: 0,
       lng: 0,
     },
     items,
-    earnings,
+    earnings: deliveryFee,
     distance: 0,
-    estimatedPickup: 5,
-    estimatedDelivery: order.estimatedDeliveryTime ?? 15,
+    estimatedPickup: 0,
+    estimatedDelivery: order.estimatedDeliveryTime ?? 0,
     // The customer OTP is generated/returned when the order is accepted.
     // Pickup/kitchen codes from the available queue are not delivery OTPs.
     otp: '',
@@ -254,10 +242,9 @@ function mapApiOrder(apiOrder: ApiOrder, driverId: number): Order {
     price: Number(i.price ?? i.unitPrice) || 0,
   }));
 
-  const subtotal = items.reduce((s, i) => s + i.price * i.quantity, 0);
   const tip = Number(apiOrder.tip) || 0;
   const deliveryFee = Number(apiOrder.deliveryFee) || 0;
-  const earnings = deliveryFee > 0 ? deliveryFee + tip : parseFloat((subtotal * 0.12 + tip).toFixed(2));
+  const earnings = deliveryFee + tip;
 
   const distance = Number(apiOrder.distance) || 0;
 
@@ -269,14 +256,14 @@ function mapApiOrder(apiOrder: ApiOrder, driverId: number): Order {
     apiId: apiOrder.id,
     reference: apiOrder.reference ?? `Commande #${apiOrder.id}`,
     restaurant: {
-      name: shop?.name ?? apiOrder.restaurantName ?? 'Restaurant',
+      name: shop?.name ?? apiOrder.restaurantName ?? '',
       address: shop?.address ?? '',
       phone: shop?.phone ?? '',
       lat: shop?.latitude ?? shop?.lat ?? 0,
       lng: shop?.longitude ?? shop?.lng ?? 0,
     },
     customer: {
-      name: customer?.name ?? apiOrder.userName ?? 'Client',
+      name: customer?.name ?? apiOrder.userName ?? '',
       address: apiOrder.deliveryAddress ?? customer?.address ?? '',
       phone: customer?.phone ?? '',
       lat: apiOrder.deliveryLatitude ?? apiOrder.customer?.latitude ?? apiOrder.customer?.lat ?? 0,
@@ -285,8 +272,8 @@ function mapApiOrder(apiOrder: ApiOrder, driverId: number): Order {
     items,
     earnings,
     distance,
-    estimatedPickup: apiOrder.estimatedPickupTime ?? 5,
-    estimatedDelivery: apiOrder.estimatedDeliveryTime ?? (distance > 0 ? Math.floor(distance * 3 + 5) : 15),
+    estimatedPickup: apiOrder.estimatedPickupTime ?? 0,
+    estimatedDelivery: apiOrder.estimatedDeliveryTime ?? 0,
     otp: apiOrder.otp ?? apiOrder.deliveryCode ?? apiOrder.pickupCode ?? apiOrder.kitchenCode ?? '',
     status: mappedStatus,
     createdAt: apiOrder.createdAt,
@@ -345,15 +332,13 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const [stats, setStats] = useState<DriverStats>({
     deliveriesToday: 0,
     deliveriesTotal: 0,
-    rating: 5.0,
-    level: 'Bronze',
-    kmToday: 0,
+    rating: 0,
   });
   const [profile, setProfile] = useState<DriverProfile>({
     id: user ? String(user.driverId) : 'DRV',
     name: user?.name ?? 'Livreur',
     phone: user?.phone ?? '',
-    vehicleType: 'Moto',
+    vehicleType: '',
     vehiclePlate: '',
   });
   const [isApiConnected, setIsApiConnected] = useState(false);
@@ -580,6 +565,10 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         vehiclePlate: d.vehiclePlate,
         photo: d.photoUrl ?? undefined,
       });
+      setStats((prev) => ({
+        ...prev,
+        rating: Number(d.rating) || 0,
+      }));
       profileAvailabilityRef.current = d.isAvailable;
       // Profile availability is not authoritative while a delivery is active.
       // The backend may briefly report the driver as available while the
@@ -651,7 +640,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           ...prev,
           deliveriesToday: e.completedToday,
           deliveriesTotal: e.totalDeliveries,
-          level: getLevelFromDeliveries(e.totalDeliveries),
         }));
       } catch (err) {
         console.warn('[DriverContext] loadEarnings failed:', err);
@@ -761,7 +749,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        if (locationPermissionRef.current === 'unknown') {
+        if (locationPermissionRef.current !== 'granted') {
           let permission = await Location.getForegroundPermissionsAsync();
           if (
             !permission.granted &&
@@ -1105,7 +1093,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
             .map((o) => ({
               ...mapApiOrder(o, driverId),
               status: 'completed' as const,
-              completedAt: o.completedAt ?? o.updatedAt ?? new Date().toISOString(),
+              completedAt: o.completedAt ?? o.updatedAt ?? o.createdAt,
               rating: o.rating,
             }));
           return [...newEntries, ...prev];
@@ -1750,7 +1738,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
               : [{
                 ...confirmedOrder,
                 status: 'completed' as const,
-                completedAt: updated.completedAt ?? new Date().toISOString(),
+                completedAt: updated.completedAt ?? updated.updatedAt ?? updated.createdAt,
                 rating: updated.rating,
               }, ...previousHistory]
           ));
@@ -1840,11 +1828,15 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         throw new Error('La livraison n’a pas été confirmée par le serveur.');
       }
 
+      const confirmedOrder = mergeOrderWithServer(
+        orderToComplete,
+        mapApiOrder(confirmed, driverId),
+      );
       const completed: DeliveryHistory = {
-        ...orderToComplete,
+        ...confirmedOrder,
         status: 'completed',
-        completedAt: new Date().toISOString(),
-        rating: 5,
+        completedAt: confirmed.completedAt ?? confirmed.updatedAt ?? confirmed.createdAt,
+        rating: confirmed.rating,
       };
 
       setHistory((prev) => (
@@ -1867,19 +1859,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         console.warn('[DriverContext] failed to persist online after delivery:', err);
       });
 
-      setEarnings((prev) => ({
-        today: parseFloat((prev.today + orderToComplete.earnings).toFixed(2)),
-        week: parseFloat((prev.week + orderToComplete.earnings).toFixed(2)),
-        month: parseFloat((prev.month + orderToComplete.earnings).toFixed(2)),
-      }));
-      setStats((prev) => ({
-        ...prev,
-        deliveriesToday: prev.deliveriesToday + 1,
-        deliveriesTotal: prev.deliveriesTotal + 1,
-        kmToday: parseFloat((prev.kmToday + orderToComplete.distance).toFixed(1)),
-      }));
-
-      // Refresh server-calculated totals
+      // Totals remain server-authoritative; never synthesize gains or delivery
+      // counts locally from the completed order.
       api.getEarnings(driverId).then((e) => {
         setEarnings({
           today: Number(e.today) || 0,
@@ -1890,7 +1871,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           ...prev,
           deliveriesToday: e.completedToday,
           deliveriesTotal: e.totalDeliveries,
-          level: getLevelFromDeliveries(e.totalDeliveries),
         }));
       }).catch(() => {});
 

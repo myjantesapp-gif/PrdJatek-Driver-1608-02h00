@@ -1,8 +1,16 @@
 node_modules/
 .cache/
+.config/
+.git/
+.local/
+.agents/
 android/
 ios/
 *.log
 *.lock
 .expo/
 dist/
+attached_assets/
+screenshots/
+tests/
+coverage/

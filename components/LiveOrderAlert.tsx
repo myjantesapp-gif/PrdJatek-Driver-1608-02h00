@@ -123,7 +123,9 @@ export function LiveOrderAlert({ order, onAccept, onDecline }: LiveOrderAlertPro
         <View style={styles.metaDot} />
         <View style={styles.metaItem}>
           <Ionicons name="time" size={14} color={Colors.secondary} />
-          <Text style={styles.metaText}>{order.estimatedDelivery} min est.</Text>
+          <Text style={styles.metaText}>
+            {order.estimatedDelivery > 0 ? `${order.estimatedDelivery} min est.` : 'Délai indisponible'}
+          </Text>
         </View>
         <View style={styles.metaDot} />
         <View style={styles.metaItem}>
