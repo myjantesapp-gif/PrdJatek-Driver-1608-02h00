@@ -57,11 +57,14 @@ import { useJatekSocket, type JatekSocketEvent } from '@/hooks/useJatekSocket';
 function Probe({
   onEvent,
   onAuthError,
+  enabled = true,
 }: {
   onEvent: (event: JatekSocketEvent) => void;
   onAuthError: () => void;
+  enabled?: boolean;
 }) {
   const { isConnected } = useJatekSocket({
+    enabled,
     driverId: 7,
     token: 'jwt-token',
     onEvent,
@@ -148,5 +151,20 @@ describe('useJatekSocket', () => {
     expect(socketHarness.socket.disconnect).toHaveBeenCalledTimes(1);
     expect(onAuthError).toHaveBeenCalledTimes(1);
     act(() => renderer.unmount());
+  });
+
+  it('does not open a connection while the driver is logged out', async () => {
+    await act(async () => {
+      TestRenderer.create(
+        <Probe
+          enabled={false}
+          onEvent={vi.fn()}
+          onAuthError={vi.fn()}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(socketHarness.io).not.toHaveBeenCalled();
   });
 });

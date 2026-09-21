@@ -1417,6 +1417,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   }, [logout]);
 
   const { isConnected: isSocketConnected } = useJatekSocket({
+    enabled: Boolean(driverId),
     driverId,
     token: api.getToken(),
     onEvent: handleSocketEvent,
