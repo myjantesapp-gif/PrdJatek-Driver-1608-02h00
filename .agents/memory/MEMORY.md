@@ -9,3 +9,4 @@
 - [Android hardware validation](android-hardware-validation.md) — this Replit workspace has no Android SDK, adb, emulator, or connected device; real APK checks require external hardware
 - [Cold-start notification routing](notification-cold-start.md) — wait for server-validated snapshot hydration before routing a notification tap to an active order
 - [EAS OTA versus native APK](eas-ota-native.md) — OTA updates JavaScript only; Android permissions and native modules require a new APK build
+- [Socket.IO backend boundary](socketio-backend-boundary.md) — the driver repo owns the client; ma.jatek.app must expose and validate the remote Socket.IO handshake

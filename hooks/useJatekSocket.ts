@@ -1,7 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
-import { io, type ManagerOptions, type Socket, type SocketOptions } from 'socket.io-client';
+import {
+  io,
+  type ManagerOptions,
+  type Socket,
+  type SocketOptions,
+} from 'socket.io-client';
 import { api, getApiBaseUrl, loadAuth } from '@/lib/api';
+
+export type JatekSocketEventName = 'order_ready' | 'order_assigned';
+
+export type JatekSocketEvent = {
+  name: JatekSocketEventName;
+  type: JatekSocketEventName;
+  data: unknown;
+};
 
 export type SocketConnectionState =
   | 'connecting'
@@ -9,21 +22,20 @@ export type SocketConnectionState =
   | 'disconnected'
   | 'error';
 
-export type JatekSocketEvent = {
-  name: string;
-  data: unknown;
-};
-
 export interface UseJatekSocketOptions {
   /** Keep the connection disabled while the driver is logged out. */
   enabled?: boolean;
+  /** Authenticated driver identity used for server-side room selection. */
+  driverId?: number | null;
+  /** Current JWT. The hook falls back to the restored API session when absent. */
+  token?: string | null;
   /** Socket.IO server origin. Defaults to the Jatek API origin. */
   url?: string;
-  /** Socket.IO path. The backend default is /socket.io. */
+  /** Socket.IO path used by the Jatek backend. */
   path?: string;
-  /** Optional event channels for servers that expose a subscribe event. */
+  /** Optional channel metadata for compatible backend implementations. */
   channels?: string[];
-  /** Called for every server event received through socket.onAny. */
+  /** Called for the order events emitted by the server. */
   onEvent?: (event: JatekSocketEvent) => void;
   /** Called when the server rejects the JWT with a 401/403-style error. */
   onAuthError?: (error: Error) => void;
@@ -47,14 +59,6 @@ const RECONNECT_DELAY_MS = 1_000;
 const RECONNECT_DELAY_MAX_MS = 30_000;
 const CONNECTION_TIMEOUT_MS = 20_000;
 
-function log(message: string, details?: unknown) {
-  if (details === undefined) {
-    console.log(`[JatekSocket] ${message}`);
-  } else {
-    console.log(`[JatekSocket] ${message}`, details);
-  }
-}
-
 function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === 'string' && error) return error;
@@ -73,26 +77,23 @@ function isAuthFailure(error: SocketError): boolean {
 
   return (
     /\b(401|403)\b/.test(description) ||
-    /unauthorized|forbidden|invalid token|token expired|jwt/i.test(description)
+    /unauthorized|forbidden|invalid token|token expired|jwt/.test(description)
   );
 }
 
 /**
  * Authenticated Socket.IO connection for Jatek Driver.
  *
- * The JWT is read from the in-memory API client first and then restored from
- * the existing auth storage. It is never written to logs. `auth.token` works
- * in browsers and native clients; `extraHeaders.Authorization` is also sent
- * by React Native transports.
- *
- * This hook does not replace the existing SSE transport automatically. The
- * current Jatek API documentation exposes `/api/events` (SSE), so enabling
- * this hook requires a Socket.IO server at the configured origin/path.
+ * The JWT is sent in auth.token and in Authorization so browsers and native
+ * clients can use the same backend handshake. Event callbacks live in refs,
+ * so changing DriverContext state does not create a second connection.
  */
 export function useJatekSocket({
   enabled = true,
+  driverId = null,
+  token = null,
   url = getApiBaseUrl(),
-  path = '/socket.io',
+  path = '/socket.io/',
   channels = [],
   onEvent,
   onAuthError,
@@ -120,40 +121,27 @@ export function useJatekSocket({
       setStatus('disconnected');
       setError(null);
       setReconnectAttempts(0);
-      log('status=disconnected (disabled)');
       return;
     }
 
     let disposed = false;
     let currentSocket: Socket | null = null;
-    let appStateSubscription: { remove: () => void } | null = null;
+    let appStateSubscription: { remove: () => void } | undefined;
 
-    const updateStatus = (next: SocketConnectionState, details?: unknown) => {
-      if (disposed) return;
-      setStatus(next);
-      log(`status=${next}`, details);
-    };
-
-    const connectWithStoredToken = async () => {
-      updateStatus('connecting');
-
-      const storedAuth = await loadAuth().catch((loadError) => {
-        log('JWT storage read failed', errorMessage(loadError));
-        return null;
-      });
+    const connectWithToken = async () => {
+      const storedAuth = await loadAuth().catch(() => null);
       if (disposed) return;
 
-      const token = api.getToken() ?? storedAuth?.token ?? null;
-      if (!token) {
-        const tokenError = new Error('Session absente pour la connexion temps réel.');
-        setError(tokenError.message);
-        updateStatus('error', 'JWT unavailable');
+      const resolvedToken = token ?? api.getToken() ?? storedAuth?.token ?? null;
+      if (!resolvedToken) {
+        setError('Session absente pour la connexion temps réel.');
+        setStatus('error');
         return;
       }
 
       const options: Partial<ManagerOptions & SocketOptions> = {
         path,
-        transports: ['websocket', 'polling'],
+        transports: ['polling', 'websocket'],
         autoConnect: false,
         reconnection: true,
         reconnectionAttempts: Infinity,
@@ -161,11 +149,15 @@ export function useJatekSocket({
         reconnectionDelayMax: RECONNECT_DELAY_MAX_MS,
         randomizationFactor: 0.25,
         timeout: CONNECTION_TIMEOUT_MS,
-        auth: { token },
+        auth: {
+          token: resolvedToken,
+          ...(driverId ? { driverId } : {}),
+          ...(channels.length > 0 ? { channels } : {}),
+        },
         // React Native sends this header. Browsers use auth.token because
         // browsers cannot set arbitrary WebSocket headers.
         extraHeaders: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${resolvedToken}`,
         },
       };
 
@@ -173,10 +165,15 @@ export function useJatekSocket({
       currentSocket = nextSocket;
       socketRef.current = nextSocket;
       setSocket(nextSocket);
+      setStatus('connecting');
 
       const refreshAuth = () => {
-        const freshToken = api.getToken() ?? token;
-        nextSocket.auth = { token: freshToken };
+        const freshToken = token ?? api.getToken() ?? resolvedToken;
+        nextSocket.auth = {
+          token: freshToken,
+          ...(driverId ? { driverId } : {}),
+          ...(channels.length > 0 ? { channels } : {}),
+        };
         nextSocket.io.opts.extraHeaders = {
           Authorization: `Bearer ${freshToken}`,
         };
@@ -186,15 +183,13 @@ export function useJatekSocket({
         if (disposed) return;
         setError(null);
         setReconnectAttempts(0);
-        updateStatus('connected', `socketId=${nextSocket.id ?? 'unknown'}`);
-        if (channels.length > 0) {
-          log('connected; channels configured', channels);
-        }
+        setStatus('connected');
       });
 
       nextSocket.on('disconnect', (reason) => {
         if (disposed) return;
-        updateStatus('disconnected', reason);
+        setStatus('disconnected');
+        setError(reason === 'io server disconnect' ? 'Serveur déconnecté.' : null);
       });
 
       nextSocket.on('connect_error', (connectError: SocketError) => {
@@ -202,22 +197,24 @@ export function useJatekSocket({
         const message = errorMessage(connectError);
         setError(message);
         setReconnectAttempts((attempt) => attempt + 1);
-        updateStatus('error', message);
+        setStatus('error');
 
         if (isAuthFailure(connectError)) {
-          log('authentication rejected; automatic reconnect stopped');
           nextSocket.io.opts.reconnection = false;
           nextSocket.disconnect();
           onAuthErrorRef.current?.(connectError);
-        } else {
-          log('connect_error; Socket.IO will retry automatically');
         }
       });
 
       nextSocket.onAny((name, data) => {
         if (disposed) return;
-        log(`event=${name}`);
-        onEventRef.current?.({ name, data });
+        if (name !== 'order_ready' && name !== 'order_assigned') return;
+        const eventName = name as JatekSocketEventName;
+        onEventRef.current?.({
+          name: eventName,
+          type: eventName,
+          data,
+        });
       });
 
       const manager = nextSocket.io;
@@ -225,24 +222,22 @@ export function useJatekSocket({
         if (disposed) return;
         refreshAuth();
         setReconnectAttempts(attempt);
-        updateStatus('connecting', `attempt=${attempt}`);
+        setStatus('connecting');
       });
-      manager.on('reconnect', (attempt) => {
+      manager.on('reconnect', () => {
         if (disposed) return;
-        setReconnectAttempts(attempt);
-        log(`reconnected after attempt=${attempt}`);
+        setStatus('connected');
       });
       manager.on('reconnect_error', (managerError) => {
         if (disposed) return;
         setError(errorMessage(managerError));
-        updateStatus('error', errorMessage(managerError));
+        setStatus('error');
       });
 
       const handleAppState = (nextState: AppStateStatus) => {
         if (disposed || nextState !== 'active' || nextSocket.connected) return;
         refreshAuth();
-        log('app became active; requesting reconnect');
-        updateStatus('connecting', 'app active');
+        setStatus('connecting');
         nextSocket.connect();
       };
       appStateSubscription = AppState.addEventListener('change', handleAppState);
@@ -251,19 +246,14 @@ export function useJatekSocket({
         if (disposed) return;
         refreshAuth();
         setError(null);
-        updateStatus('connecting', 'manual reconnect');
+        setStatus('connecting');
         nextSocket.connect();
       };
 
-      log('initializing Socket.IO connection', {
-        url,
-        path,
-        transport: 'websocket → polling fallback',
-      });
       nextSocket.connect();
     };
 
-    void connectWithStoredToken();
+    void connectWithToken();
 
     return () => {
       disposed = true;
@@ -274,9 +264,9 @@ export function useJatekSocket({
       currentSocket?.disconnect();
       if (socketRef.current === currentSocket) socketRef.current = null;
       setSocket(null);
-      log('status=disconnected (cleanup)');
+      setStatus('disconnected');
     };
-  }, [enabled, url, path, channels.join(',')]);
+  }, [enabled, driverId, token, url, path, channels.join(',')]);
 
   return {
     socket,

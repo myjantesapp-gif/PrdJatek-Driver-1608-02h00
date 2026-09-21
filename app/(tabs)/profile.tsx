@@ -211,7 +211,7 @@ export default function ProfileScreen() {
         <View style={[styles.apiStatus, { marginTop: 4 }]}>
           <View style={[styles.apiDot, { backgroundColor: isSocketConnected ? Colors.success : Colors.warning ?? '#F59E0B' }]} />
           <Text style={styles.apiStatusText}>
-             {isSocketConnected ? 'Commandes en temps réel (SSE)' : 'Temps réel en attente de connexion…'}
+             {isSocketConnected ? 'Commandes en temps réel (Socket.IO)' : 'Temps réel en attente de connexion…'}
           </Text>
         </View>
         <View style={[styles.apiStatus, { marginTop: 4 }]}>

@@ -14,7 +14,7 @@ import {
   loadActiveOrderSnapshot,
   clearActiveOrderSnapshot,
 } from '@/lib/api';
-import { JatekSse, SseEvent } from '@/lib/sse';
+import { JatekSocketEvent, useJatekSocket } from '@/hooks/useJatekSocket';
 import * as ExpoNotifications from 'expo-notifications';
 import {
   configureNotifications,
@@ -310,7 +310,7 @@ const DriverContext = createContext<DriverContextType | null>(null);
 
 /**
  * Primary polling interval (ms).
- * Polling remains a safety net for SSE disconnects and app backgrounding.
+ * Polling remains a safety net for Socket.IO disconnects and app backgrounding.
  */
 const FALLBACK_POLL_MS = 3_000;
 const DRIVER_LOCATION_POLL_MS = 10_000;
@@ -345,7 +345,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     vehiclePlate: '',
   });
   const [isApiConnected, setIsApiConnected] = useState(false);
-  const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null);
   const [pushNotificationStatus, setPushNotificationStatus] =
     useState<PushNotificationStatus>('unknown');
@@ -362,7 +361,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   /** Pre-fetched full order data for available-queue entries (coordinates enriched). */
   const enrichedOrderCache = useRef<Map<number, Order>>(new Map());
   /**
-   * Offers removed because the server already assigned them elsewhere (409/SSE)
+   * Offers removed because the server already assigned them elsewhere (409/Socket.IO)
    * or because the driver's profile is not eligible (412).
    */
   const suppressedOfferIds = useRef<Set<number>>(new Set());
@@ -941,7 +940,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
   const pollOrders = useCallback((): Promise<void> => {
     if (!driverId) return Promise.resolve();
-    // SSE and the fallback interval can fire together. All callers share the
+    // Socket.IO events and the fallback interval can fire together. All callers share the
     // active synchronization so no stale response can overwrite newer UI, and
     // callers that need reconciliation can wait for it to finish.
     if (pollInFlightRef.current) return pollInFlightRef.current;
@@ -1303,9 +1302,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     queueActiveSnapshotWrite,
   ]);
 
-  // ── SSE + fallback polling ───────────────────────────────────────────────────
+  // ── Socket.IO + fallback polling ─────────────────────────────────────────────
 
-  const getSsePayload = (event: SseEvent): UnknownRecord | null => {
+  const getSocketPayload = (event: JatekSocketEvent): UnknownRecord | null => {
     if (!event.data) return null;
     if (isRecord(event.data)) return event.data;
     if (typeof event.data !== 'string') return null;
@@ -1317,7 +1316,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const getSseNestedPayload = (payload: UnknownRecord): UnknownRecord => {
+  const getSocketNestedPayload = (payload: UnknownRecord): UnknownRecord => {
     const nested = payload.order ?? payload.data;
     if (isRecord(nested)) return nested;
     if (typeof nested === 'string') {
@@ -1331,10 +1330,10 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     return {};
   };
 
-  const getSseOrderId = (event: SseEvent): number | null => {
-    const payload = getSsePayload(event);
+  const getSocketOrderId = (event: JatekSocketEvent): number | null => {
+    const payload = getSocketPayload(event);
     if (!payload) return null;
-    const nested = getSseNestedPayload(payload);
+    const nested = getSocketNestedPayload(payload);
     const value = payload.orderId ?? nested.orderId ?? nested.id;
     const id = Number(value);
     return Number.isFinite(id) && id > 0 ? id : null;
@@ -1344,99 +1343,91 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     pollOrdersRef.current = pollOrders;
   }, [pollOrders]);
 
-  // Profile restoration and the status toggle can both make the driver online
-  // after the SSE effect has already performed its initial poll. Reconcile
-  // immediately instead of waiting for the 3-second fallback interval.
+  const handleSocketEvent = useCallback((event: JatekSocketEvent) => {
+    const orderId = getSocketOrderId(event);
+
+    if (event.type === 'order_ready') {
+      pollOrdersRef.current();
+      return;
+    }
+
+    if (!orderId) return;
+    const payload = getSocketPayload(event);
+    const nested = payload ? getSocketNestedPayload(payload) : {};
+    const assignedDriverId = Number(payload?.driverId ?? nested.driverId);
+    const isOfferRemoval = event.type === 'order_assigned';
+
+    // Only remove an offer when the event explicitly identifies another
+    // driver. The server normally targets the driver's room, but this guard
+    // keeps a broadcast event from removing a valid offer.
+    if (
+      isOfferRemoval &&
+      Number.isFinite(assignedDriverId) &&
+      assignedDriverId !== driverId
+    ) {
+      lastAvailableOrdersRef.current = lastAvailableOrdersRef.current.filter(
+        (order) => !sameOrderId(order.id, orderId),
+      );
+      suppressedOfferIds.current.add(orderId);
+      pendingQueueRef.current = pendingQueueRef.current.filter((id) => id !== orderId);
+      enrichedOrderCache.current.delete(orderId);
+      seenOrderIds.current.delete(orderId);
+      setIncomingOrder((current) => {
+        if (current?.apiId !== orderId) return current;
+        if (incomingTimerRef.current) clearTimeout(incomingTimerRef.current);
+        return null;
+      });
+    }
+
+    pollOrdersRef.current();
+  }, [driverId]);
+
+  const handleSocketAuthError = useCallback(() => {
+    console.warn('[DriverContext] Socket.IO auth error — token rejected by server, logging out');
+    setIsApiConnected(false);
+    // Logout clears the token and navigates to login via _layout.tsx.
+    logout().catch(() => {});
+  }, [logout]);
+
+  const { isConnected: isSocketConnected } = useJatekSocket({
+    driverId,
+    token: api.getToken(),
+    onEvent: handleSocketEvent,
+    onAuthError: handleSocketAuthError,
+  });
+
+  // Profile restoration and the status toggle can both make the driver online.
+  // Reconcile immediately instead of waiting for the fallback interval.
   useEffect(() => {
     if (!driverId || status !== 'online' || activeOrderRef.current) return;
     void pollOrdersRef.current();
   }, [driverId, status]);
 
+  // A successful reconnect gets one immediate authoritative synchronization.
+  useEffect(() => {
+    if (driverId && isSocketConnected) void pollOrdersRef.current();
+  }, [driverId, isSocketConnected]);
+
   useEffect(() => {
     if (!driverId) return;
 
-    const sse = new JatekSse(
-      () => api.getToken(),
-      ['available_orders', `driver_orders:${driverId}`],
-    );
-
-    const unsubStatus = sse.onStatusChange(setIsSocketConnected);
-
-    // On 401/403: token is invalid — stop reconnecting and log the driver out
-    const unsubAuth = sse.onAuthError(() => {
-      console.warn('[DriverContext] SSE auth error — token rejected by server, logging out');
-      setIsSocketConnected(false);
-      setIsApiConnected(false);
-      // Logout clears the token and navigates to login via _layout.tsx
-      logout().catch(() => {});
-    });
-
-    const unsubEvent = sse.onEvent((event) => {
-      const orderId = getSseOrderId(event);
-
-      if (event.type === 'order_ready') {
-        pollOrdersRef.current();
-        return;
-      }
-
-      if (!orderId) return;
-      const payload = getSsePayload(event);
-      const nested = payload ? getSseNestedPayload(payload) : {};
-      const assignedDriverId = Number(payload?.driverId ?? nested.driverId);
-      const isOfferRemoval = /assigned|accepted|taken|removed|unavailable/i.test(event.type);
-
-      // Only remove an offer when the event explicitly identifies another
-      // driver. Status events often omit driverId and must never be treated as
-      // proof that an available order was taken.
-      if (
-        isOfferRemoval &&
-        Number.isFinite(assignedDriverId) &&
-        assignedDriverId !== driverId
-      ) {
-        lastAvailableOrdersRef.current = lastAvailableOrdersRef.current.filter(
-          (order) => !sameOrderId(order.id, orderId),
-        );
-        suppressedOfferIds.current.add(orderId);
-        pendingQueueRef.current = pendingQueueRef.current.filter((id) => id !== orderId);
-        enrichedOrderCache.current.delete(orderId);
-        seenOrderIds.current.delete(orderId);
-        setIncomingOrder((current) => {
-          if (current?.apiId !== orderId) return current;
-          if (incomingTimerRef.current) clearTimeout(incomingTimerRef.current);
-          return null;
-        });
-      }
-
-      pollOrdersRef.current();
-    });
-
     // Android may pause timers while the app is backgrounded. Reconcile
-    // immediately when it becomes active again instead of waiting for the
-    // fallback interval to fire.
+    // immediately when it becomes active again instead of waiting for polling.
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') {
-        pollOrdersRef.current();
-      }
+      if (nextState === 'active') pollOrdersRef.current();
     });
 
-    const stopSse = sse.start();
-
-    // Initial sync
     pollOrdersRef.current();
-
     fallbackPollRef.current = setInterval(() => pollOrdersRef.current(), FALLBACK_POLL_MS);
 
     return () => {
-      clearInterval(fallbackPollRef.current!);
-      unsubStatus();
-      unsubAuth();
-      unsubEvent();
+      if (fallbackPollRef.current) {
+        clearInterval(fallbackPollRef.current);
+        fallbackPollRef.current = null;
+      }
       appStateSubscription.remove();
-      stopSse();
-      setIsSocketConnected(false);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [driverId]); // intentionally only driverId — pollOrders accessed via pollOrdersRef
+  }, [driverId]);
 
   // ── Order actions ────────────────────────────────────────────────────────────
 

@@ -76,21 +76,8 @@ vi.mock('expo-location', () => ({
 vi.mock('expo-notifications', () => ({}));
 vi.mock('@/context/AuthContext', () => ({ useAuth: () => auth }));
 vi.mock('@/lib/notifications', () => notificationBridge);
-vi.mock('@/lib/sse', () => ({
-  JatekSse: class {
-    onStatusChange() {
-      return () => {};
-    }
-    onAuthError() {
-      return () => {};
-    }
-    onEvent() {
-      return () => {};
-    }
-    start() {
-      return () => {};
-    }
-  },
+vi.mock('@/hooks/useJatekSocket', () => ({
+  useJatekSocket: vi.fn(() => ({ isConnected: false })),
 }));
 
 import { useDriver, DriverProvider } from '../context/DriverContext';
