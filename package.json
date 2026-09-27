@@ -50,7 +50,8 @@
     "web": "expo start --web",
     "build:android": "eas build --platform android",
     "build:android-local": "eas build --platform android --local",
-    "test": "vitest run"
+    "test": "vitest run --exclude tests/jatek-socket-delivery.smoke.test.ts",
+    "test:socket-smoke": "vitest run tests/jatek-socket-delivery.smoke.test.ts"
   },
   "private": true,
   "packageManager": "pnpm@10.26.1"
