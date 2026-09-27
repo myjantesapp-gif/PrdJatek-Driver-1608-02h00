@@ -3,6 +3,16 @@ const path = require('path');
 
 const config = getDefaultConfig(__dirname);
 
+// Replit rotates files in .local/state/workflow-logs while Metro scans the
+// workspace. Exclude this internal directory to avoid an ENOENT watcher crash.
+const defaultBlockList = config.resolver.blockList;
+config.resolver.blockList = [
+  ...(Array.isArray(defaultBlockList)
+    ? defaultBlockList
+    : defaultBlockList ? [defaultBlockList] : []),
+  /[/\\]\.local[/\\]/,
+];
+
 const WEB_STUBS = {
   'react-native-maps': path.resolve(__dirname, 'stubs/react-native-maps.js'),
   'react-native-worklets': path.resolve(__dirname, 'stubs/react-native-worklets.js'),

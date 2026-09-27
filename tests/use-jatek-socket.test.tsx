@@ -97,7 +97,7 @@ describe('useJatekSocket', () => {
     });
 
     expect(socketHarness.io).toHaveBeenCalledWith(
-      'https://api.jatek.app',
+      'https://ma.jatek.app',
       expect.objectContaining({
         path: '/socket.io/',
         auth: { token: 'jwt-token', driverId: 7 },

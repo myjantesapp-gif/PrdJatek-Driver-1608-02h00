@@ -26,7 +26,7 @@ export default function SupportScreen() {
           </View>
           <Text style={styles.title}>Messagerie indisponible</Text>
           <Text style={styles.description}>
-            Aucun service de support n’est actuellement exposé par api.jatek.app.
+            Aucun service de support n’est actuellement exposé par ma.jatek.app.
             L’application n’envoie donc aucun message à un service local, simulé ou tiers.
           </Text>
         </View>
