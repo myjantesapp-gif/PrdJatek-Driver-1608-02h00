@@ -10,3 +10,5 @@ An EAS Update on the `preview` channel can deliver JavaScript and bundled assets
 **How to apply:** Publish OTA for JS-only fixes, and schedule a fresh EAS preview APK whenever app.json permissions, native dependencies, or other config-plugin output changes. Validate native behavior on an external Android device.
 
 If a required native build is blocked, do not leave an OTA that imports the new native module on the existing runtime. Republish a JS-only compatible update first; otherwise older preview binaries may fail at startup.
+
+Replit Secrets are not automatically injected into remote EAS build environments. Add native configuration keys such as `GOOGLE_MAPS_API_KEY` separately as Secret variables in each EAS environment/profile that builds native binaries.

@@ -5,7 +5,9 @@ const baseExpoConfig = appJson.expo;
 const isEasNativeBuild = process.env.EAS_BUILD === 'true';
 
 if (isEasNativeBuild && !mapsApiKey) {
-  throw new Error('GOOGLE_MAPS_API_KEY is required for native EAS builds.');
+  throw new Error(
+    'GOOGLE_MAPS_API_KEY is missing from the EAS build environment. Add it as a Secret to the EAS environment used by this build profile (preview, development, or production).',
+  );
 }
 
 module.exports = {
