@@ -28,7 +28,7 @@
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.POST_NOTIFICATIONS"
       ],
-      "versionCode": 24
+      "versionCode": 25
     },
     "web": {
       "bundler": "metro",
