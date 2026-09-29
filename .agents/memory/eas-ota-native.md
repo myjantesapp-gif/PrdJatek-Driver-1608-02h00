@@ -12,3 +12,9 @@ An EAS Update on the `preview` channel can deliver JavaScript and bundled assets
 If a required native build is blocked, do not leave an OTA that imports the new native module on the existing runtime. Republish a JS-only compatible update first; otherwise older preview binaries may fail at startup.
 
 Replit Secrets are not automatically injected into remote EAS build environments. Add native configuration keys such as `GOOGLE_MAPS_API_KEY` separately as Secret variables in each EAS environment/profile that builds native binaries.
+
+Keep `expo.owner`, `extra.eas.projectId`, `updates.url`, and the EAS profile's owner/project ID values aligned with the single Expo project selected for GitHub builds. Changing the project ID redirects OTA updates as well as future builds.
+
+**Why:** GitHub-connected builds enforce that the config project ID matches their linked Expo project; a mismatch fails before native compilation. OTA update URLs are also project-specific.
+
+**How to apply:** Before updating these identifiers, confirm which Expo project is canonical. Update all config references together; do not change the target project based on a build error alone.
