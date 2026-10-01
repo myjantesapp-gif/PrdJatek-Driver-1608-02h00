@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0A0A0F"
+      "backgroundColor": "#F1B5D1"
     },
     "ios": {
       "supportsTablet": false,
@@ -20,7 +20,8 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundColor": "#0A0A0F"
+        "backgroundColor": "#F1B5D1",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "package": "com.jatek.driver",
       "permissions": [
@@ -40,7 +41,8 @@
         "expo-notifications",
         {
           "defaultChannel": "orders",
-          "color": "#E91E8C"
+          "icon": "./assets/notification-icon.png",
+          "color": "#CF346E"
         }
       ],
       [
