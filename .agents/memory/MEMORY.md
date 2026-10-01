@@ -5,7 +5,7 @@
 - [Expo web preview startup](expo-web-preview.md) — use offline production-preview mode when DevTools cannot load its Linux shell
 - [Android notification permissions](android-notification-permissions.md) — prompt only from the undetermined state; denied users must use system settings to re-enable alerts
 - [Remote business API boundary](remote-api-cors.md) — use the documented ma.jatek.app origin only; do not add alternate origins or synthesize business data
-- [Realtime transport boundary](realtime-transport.md) — current Jatek backend documents SSE only; Socket.IO needs a server endpoint before replacing the existing stream
+- [Realtime transport boundary](realtime-transport.md) — current driver contract uses Socket.IO; SSE is historical, with polling as fallback
 - [Android hardware validation](android-hardware-validation.md) — this Replit workspace has no Android SDK, adb, emulator, or connected device; real APK checks require external hardware
 - [Cold-start notification routing](notification-cold-start.md) — wait for server-validated snapshot hydration before routing a notification tap to an active order
 - [EAS OTA versus native APK](eas-ota-native.md) — OTA updates JavaScript only; Android permissions and native modules require a new APK build

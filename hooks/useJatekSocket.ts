@@ -127,6 +127,8 @@ export function useJatekSocket({
     let disposed = false;
     let currentSocket: Socket | null = null;
     let appStateSubscription: { remove: () => void } | undefined;
+    let serverDisconnectRetryTimer: ReturnType<typeof setTimeout> | null = null;
+    let serverDisconnectRetryCount = 0;
 
     const connectWithToken = async () => {
       const storedAuth = await loadAuth().catch(() => null);
@@ -179,8 +181,29 @@ export function useJatekSocket({
         };
       };
 
+      const scheduleServerDisconnectReconnect = () => {
+        if (disposed || serverDisconnectRetryTimer) return;
+        const delay = Math.min(
+          RECONNECT_DELAY_MS * 2 ** serverDisconnectRetryCount,
+          RECONNECT_DELAY_MAX_MS,
+        );
+        serverDisconnectRetryCount += 1;
+        serverDisconnectRetryTimer = setTimeout(() => {
+          serverDisconnectRetryTimer = null;
+          if (disposed) return;
+          refreshAuth();
+          setStatus('connecting');
+          nextSocket.connect();
+        }, delay);
+      };
+
       nextSocket.on('connect', () => {
         if (disposed) return;
+        if (serverDisconnectRetryTimer) {
+          clearTimeout(serverDisconnectRetryTimer);
+          serverDisconnectRetryTimer = null;
+        }
+        serverDisconnectRetryCount = 0;
         setError(null);
         setReconnectAttempts(0);
         setStatus('connected');
@@ -190,6 +213,12 @@ export function useJatekSocket({
         if (disposed) return;
         setStatus('disconnected');
         setError(reason === 'io server disconnect' ? 'Serveur déconnecté.' : null);
+        // Socket.IO deliberately does not reconnect after a server-initiated
+        // namespace disconnect. Retry with backoff; transport/network drops
+        // continue to use the manager's built-in reconnection.
+        if (reason === 'io server disconnect') {
+          scheduleServerDisconnectReconnect();
+        }
       });
 
       nextSocket.on('connect_error', (connectError: SocketError) => {
@@ -244,6 +273,11 @@ export function useJatekSocket({
 
       reconnectRef.current = () => {
         if (disposed) return;
+        if (serverDisconnectRetryTimer) {
+          clearTimeout(serverDisconnectRetryTimer);
+          serverDisconnectRetryTimer = null;
+        }
+        serverDisconnectRetryCount = 0;
         refreshAuth();
         setError(null);
         setStatus('connecting');
@@ -257,6 +291,10 @@ export function useJatekSocket({
 
     return () => {
       disposed = true;
+      if (serverDisconnectRetryTimer) {
+        clearTimeout(serverDisconnectRetryTimer);
+        serverDisconnectRetryTimer = null;
+      }
       appStateSubscription?.remove();
       reconnectRef.current = null;
       currentSocket?.removeAllListeners();

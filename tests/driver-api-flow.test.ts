@@ -126,6 +126,56 @@ describe('documented driver API flow', () => {
     );
   });
 
+  it('sends finite GPS coordinates as latitude then longitude', async () => {
+    api.setToken('test-token');
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+    await api.updateLocation(7, Number('48.8566'), Number('2.3522'));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://ma.jatek.app/api/drivers/7/location',
+      expect.objectContaining({
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer test-token',
+        },
+        body: JSON.stringify({ latitude: 48.8566, longitude: 2.3522 }),
+      }),
+    );
+  });
+
+  it('rejects invalid GPS coordinates before sending them', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+    await expect(api.updateLocation(7, Number.NaN, 2.3522))
+      .rejects.toThrow('Coordonnées GPS invalides.');
+    await expect(api.updateLocation(7, 48.8566, 181))
+      .rejects.toThrow('Coordonnées GPS invalides.');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('sends the driver heartbeat to the documented endpoint', async () => {
+    api.setToken('test-token');
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({ alive: true }));
+
+    await api.heartbeat(7);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://ma.jatek.app/api/drivers/7/heartbeat',
+      expect.objectContaining({
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer test-token',
+        },
+        body: JSON.stringify({}),
+      }),
+    );
+  });
+
   it('keeps the HTTP status when the server returns non-JSON error content', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
       new Response('<html>Bad Gateway</html>', { status: 502 }),

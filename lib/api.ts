@@ -509,9 +509,25 @@ class JatekApi {
     latitude: number,
     longitude: number,
   ): Promise<ApiLocationResponse> {
+    const numericLatitude = Number(latitude);
+    const numericLongitude = Number(longitude);
+    if (
+      !Number.isFinite(numericLatitude) ||
+      numericLatitude < -90 ||
+      numericLatitude > 90 ||
+      !Number.isFinite(numericLongitude) ||
+      numericLongitude < -180 ||
+      numericLongitude > 180
+    ) {
+      throw new TypeError('Coordonnées GPS invalides.');
+    }
+
     return this.request<ApiLocationResponse>(`/api/drivers/${id}/location`, {
       method: 'PATCH',
-      body: JSON.stringify({ latitude, longitude }),
+      body: JSON.stringify({
+        latitude: numericLatitude,
+        longitude: numericLongitude,
+      }),
     });
   }
 

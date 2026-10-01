@@ -14,6 +14,7 @@ const socketHarness = vi.hoisted(() => {
   };
   return {
     listeners,
+    managerListeners,
     manager,
     socket: {
       on: vi.fn((event: string, handler: (...args: any[]) => void) => {
@@ -77,11 +78,14 @@ function Probe({
 describe('useJatekSocket', () => {
   beforeEach(() => {
     socketHarness.listeners.clear();
+    socketHarness.managerListeners.clear();
+    socketHarness.manager.opts.reconnection = true;
     socketHarness.io.mockReturnValue(socketHarness.socket);
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   it('opens one authenticated Socket.IO connection and forwards order events', async () => {
@@ -103,6 +107,8 @@ describe('useJatekSocket', () => {
         auth: { token: 'jwt-token', driverId: 7 },
         extraHeaders: { Authorization: 'Bearer jwt-token' },
         autoConnect: false,
+        reconnection: true,
+        reconnectionAttempts: Infinity,
       }),
     );
     expect(socketHarness.socket.connect).toHaveBeenCalledTimes(1);
@@ -130,6 +136,32 @@ describe('useJatekSocket', () => {
 
     act(() => renderer.unmount());
     expect(socketHarness.socket.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a server-initiated disconnect with backoff', async () => {
+    vi.useFakeTimers();
+    let renderer!: ReturnType<typeof TestRenderer.create>;
+
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <Probe onEvent={vi.fn()} onAuthError={vi.fn()} />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(socketHarness.socket.connect).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      socketHarness.listeners.get('disconnect')?.('io server disconnect');
+    });
+    expect(socketHarness.socket.connect).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(socketHarness.socket.connect).toHaveBeenCalledTimes(2);
+
+    act(() => renderer.unmount());
   });
 
   it('stops reconnecting and reports an authentication failure', async () => {
