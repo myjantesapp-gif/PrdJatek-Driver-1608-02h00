@@ -3,8 +3,8 @@ name: Remote business API boundary
 description: Defines the authoritative Jatek business-data origin and the separate browser CORS requirement.
 ---
 
-**Rule:** All Jatek Driver business data must come exclusively from the current documented backend origin, `https://ma.jatek.app`. Do not add a fallback API origin, mock business records, or locally synthesize missing earnings, ratings, levels, statistics, or delivery estimates.
+**Rule:** Keep `https://ma.jatek.app` as the primary Jatek Driver origin. Any failover origin must be explicitly approved, HTTPS, and provide the same REST routes, authentication, and real-time contract. Never expose private backend secrets in the Expo client or synthesize business data.
 
-**Why:** The user explicitly requested the remote backend at `ma.jatek.app`, matching the supplied driver API contract. This supersedes the earlier `api.jatek.app` origin. Alternate origins and locally derived defaults can conflict with the authoritative backend; browser CORS remains a server-side concern.
+**Why:** The user confirmed `ma.jatek.app` as primary and requested dynamic failover if it becomes unavailable. Failover sends the same driver bearer token and GPS data to another origin, so the origin must be operator-approved. Private backend secrets cannot safely be embedded in a mobile bundle.
 
-**How to apply:** Keep one business API base URL for HTTP, SSE, and Socket.IO. Treat AsyncStorage only as session/cache storage and validate cached order state remotely before display. Configure the current backend to accept the web origin; do not restore the old origin as a CORS workaround.
+**How to apply:** For dynamic configuration, use an admin/backend-controlled public allowlist served from a control plane that remains reachable when the primary API is down; cache the last valid list for offline startup. Fail over only on network/timeout or server availability errors, never on authentication or business 4xx responses. Keep browser CORS configured on each approved server.
