@@ -3,9 +3,9 @@
     "name": "Jatek Driver",
     "slug": "jatekdriver",
     "owner": "jateksys",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/driver-icon.png",
     "scheme": "jatekdriver",
     "userInterfaceStyle": "dark",
     "splash": {
@@ -19,7 +19,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/android-icon-foreground.png",
+        "foregroundImage": "./assets/driver-icon-foreground.png",
         "backgroundColor": "#F1B5D1",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },

@@ -29,8 +29,6 @@ export interface UseJatekSocketOptions {
   driverId?: number | null;
   /** Current JWT. The hook falls back to the restored API session when absent. */
   token?: string | null;
-  /** Socket.IO server origin. Defaults to the Jatek API origin. */
-  url?: string;
   /** Socket.IO path used by the Jatek backend. */
   path?: string;
   /** Optional channel metadata for compatible backend implementations. */
@@ -92,12 +90,13 @@ export function useJatekSocket({
   enabled = true,
   driverId = null,
   token = null,
-  url = getApiBaseUrl(),
   path = '/socket.io/',
   channels = [],
   onEvent,
   onAuthError,
 }: UseJatekSocketOptions = {}): UseJatekSocketResult {
+  // Business events must use the same exclusive remote origin as REST.
+  const url = getApiBaseUrl();
   const [socket, setSocket] = useState<Socket | null>(null);
   const [status, setStatus] = useState<SocketConnectionState>('disconnected');
   const [error, setError] = useState<string | null>(null);

@@ -10,9 +10,15 @@ const { nativeSnapshot, verifySnapshot, canonical, nativeConfig } = require('../
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('OTA native compatibility guard', () => {
-  it('accepts the current source against the verified preview APK baseline', () => {
+  it('accepts verified sources or blocks a new runtime awaiting its APK baseline', () => {
     const baseline = JSON.parse(readFileSync(resolve(root, '.eas/ota-native-baseline.json'), 'utf8'));
-    expect(() => verifySnapshot(nativeSnapshot(root), baseline.snapshot)).not.toThrow();
+    const app = JSON.parse(readFileSync(resolve(root, 'app.json'), 'utf8')).expo;
+    const check = () => verifySnapshot(nativeSnapshot(root), baseline.snapshot);
+    if (app.version === baseline.runtimeVersion) {
+      expect(check).not.toThrow();
+    } else {
+      expect(check).toThrow('No OTA was published');
+    }
   });
 
   it.each(['config', 'dependencies'])('rejects changed native %s', (field) => {

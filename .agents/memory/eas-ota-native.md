@@ -11,6 +11,31 @@ An EAS Update on the `preview` channel can deliver JavaScript and bundled assets
 
 If a required native build is blocked, do not leave an OTA that imports the new native module on the existing runtime. Republish a JS-only compatible update first; otherwise older preview binaries may fail at startup.
 
+A matching native fingerprint on a newly built APK does not make older APKs with
+the same runtime compatible. Under the `appVersion` policy, incompatible native
+changes must bump the app version before building or publishing an OTA.
+
+**Why:** EAS Update targets the runtime cohort, not one particular APK. Reusing a
+runtime for different native capabilities can send a valid new-build update to
+an older binary that lacks its native modules.
+
+**How to apply:** Use fingerprint matching as a compatibility check, not as a
+replacement for runtime separation. Keep incompatible native releases on
+different app versions.
+
+Cross-environment build/workflow fingerprint differences do not alone prove
+native incompatibility.
+
+**Why:** The build and workflow environments produced different fingerprints
+even though the verified APK's native source, dependencies, and assets were
+unchanged. Installation or environment inputs can affect the hash.
+
+**How to apply:** Investigate source and environment differences before requiring
+an unnecessary rebuild. For a legacy appVersion cohort, validate any source
+baseline against the actual successfully built source, never merely against the
+current workspace. Do not refresh a baseline to bypass a failed check; remote
+native environment changes remain a separate release-review responsibility.
+
 Replit Secrets are not automatically injected into remote EAS build environments. Add native configuration keys such as `GOOGLE_MAPS_API_KEY` separately as Secret variables in each EAS environment/profile that builds native binaries.
 
 Keep `expo.owner`, `extra.eas.projectId`, `updates.url`, and the EAS profile's owner/project ID values aligned with the single Expo project selected for GitHub builds. Changing the project ID redirects OTA updates as well as future builds.

@@ -5,7 +5,7 @@
 - Expo app: `@jateksys/jatekdriver`
 - Project ID: `38b2a449-33b2-4549-8f5f-c7f535d41a34`
 - SDK: 57
-- App version and current runtime: `1.0.0`
+- App version and new native runtime: `1.0.1`
 - Android package: `com.jatek.driver`
 - Environment and update channel: `preview`
 - Build profile: `preview`, internal APK, Linux Medium, remote signing credentials
@@ -41,6 +41,14 @@ The initial baseline is for the verified Android APK version code 26, runtime
 `scripts/check-ota-native.cjs`. This deliberately compares source semantics,
 not a cross-environment EAS fingerprint: the initial live run showed different
 fingerprints despite unchanged native source and dependencies.
+
+The new driver icon is configured for the `1.0.1` native release. Until that
+APK finishes successfully and its source baseline is reviewed, OTA publication
+is intentionally blocked. The older `1.0.0` runtime stays isolated.
+
+All business REST requests and Socket.IO connections use only
+`https://ma.jatek.app`. There is no local business database, generated order
+feed, alternate origin, or environment-controlled backend override.
 
 Do not refresh the baseline just to bypass a failure. After bumping the runtime,
 building and validating a new APK, review its source and explicitly regenerate
