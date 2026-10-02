@@ -27,10 +27,33 @@ not publish to production. Expo supports skipping a run with `[eas skip]`,
 
 The workflow:
 
-1. Computes the native fingerprint in the `preview` EAS environment.
-2. Finds an internal Android preview build with the same fingerprint and runtime.
-3. Refuses to publish without a compatible build.
-4. Runs the typecheck and unit tests before publishing the Android OTA.
+1. Compares native configuration, dependencies, lockfile, config plugins, and
+   native image assets against the source baseline of the verified Android APK.
+2. Ignores app build counters and the exact read-only `tsc --noEmit` script
+   added after the APK. Other package scripts, including install hooks, are
+   checked. JavaScript source and OTA-only asset edits are allowed.
+3. Refuses to publish if any checked native source changed.
+4. Runs fixed typecheck/test commands, then rechecks native inputs immediately
+   before publishing the Android OTA.
+
+The initial baseline is for the verified Android APK version code 26, runtime
+`1.0.0`. It is stored in `.eas/ota-native-baseline.json` and enforced by
+`scripts/check-ota-native.cjs`. This deliberately compares source semantics,
+not a cross-environment EAS fingerprint: the initial live run showed different
+fingerprints despite unchanged native source and dependencies.
+
+Do not refresh the baseline just to bypass a failure. After bumping the runtime,
+building and validating a new APK, review its source and explicitly regenerate
+the snapshot for that verified release:
+
+```sh
+node -e "console.log(JSON.stringify(require('./scripts/check-ota-native.cjs').nativeSnapshot(process.cwd()), null, 2))"
+```
+
+Replace the baseline snapshot and its runtime/build metadata only after
+confirming they match the new APK. This command prints hashes, not secrets.
+Changing native EAS environment variables still requires a native-release
+review; this source-only check cannot detect remote environment changes.
 
 The push trigger requires the GitHub connection to be enabled in this Expo
 project's settings. Adding files locally is not itself a push and cannot activate
