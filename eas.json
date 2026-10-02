@@ -1,7 +1,7 @@
 
 {
   "cli": {
-    "version": ">= 14.7.1",
+    "version": ">= 24.8.0",
     "appVersionSource": "local"
   },
   "build": {
@@ -23,6 +23,7 @@
     },
     "preview": {
       "distribution": "internal",
+      "environment": "preview",
       "autoIncrement": true,
       "channel": "preview",
       "credentialsSource": "remote",
@@ -35,7 +36,8 @@
         "EXPO_SLUG": "jatekdriver"
       },
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "resourceClass": "medium"
       }
     },
     "production": {

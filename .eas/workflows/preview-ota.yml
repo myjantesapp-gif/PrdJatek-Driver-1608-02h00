@@ -1,0 +1,65 @@
+name: Android preview OTA after push
+
+# Every branch push targets the shared preview channel, never production.
+# GitHub must be linked to this Expo project for push triggers to run.
+on:
+  push: {}
+
+jobs:
+  fingerprint:
+    name: Check Android native compatibility
+    type: fingerprint
+    environment: preview
+    env:
+      npm_config_frozen_lockfile: 'false'
+      PNPM_VERSION: '10.26.1'
+      EXPO_PUBLIC_DOMAIN: ma.jatek.app
+      EXPO_PUBLIC_PROJECT_ID: 38b2a449-33b2-4549-8f5f-c7f535d41a34
+      EXPO_OWNER: jateksys
+      EXPO_SLUG: jatekdriver
+
+  compatible_build:
+    name: Find a compatible preview APK
+    type: get-build
+    needs: [fingerprint]
+    params:
+      platform: android
+      profile: preview
+      distribution: internal
+      channel: preview
+      app_identifier: com.jatek.driver
+      fingerprint_hash: ${{ needs.fingerprint.outputs.android_fingerprint_hash }}
+
+  publish_update:
+    name: Publish Android preview OTA
+    type: update
+    needs: [compatible_build]
+    environment: preview
+    env:
+      npm_config_frozen_lockfile: 'false'
+      PNPM_VERSION: '10.26.1'
+      EXPO_PUBLIC_DOMAIN: ma.jatek.app
+      EXPO_PUBLIC_PROJECT_ID: 38b2a449-33b2-4549-8f5f-c7f535d41a34
+      EXPO_OWNER: jateksys
+      EXPO_SLUG: jatekdriver
+    params:
+      platform: android
+      channel: preview
+    hooks:
+      before_update:
+        - name: Require a compatible native APK
+          run: |
+            if [ -z "${{ needs.compatible_build.outputs.build_id }}" ]; then
+              echo "No compatible preview APK found. Do not publish this OTA."
+              echo "For native changes, bump expo.version (runtime policy appVersion), build a new preview APK, and install it before publishing."
+              exit 1
+            fi
+            expected_runtime="$(node -p "require('./app.json').expo.version")"
+            if [ "${{ needs.compatible_build.outputs.runtime_version }}" != "$expected_runtime" ]; then
+              echo "The compatible APK runtime does not match this appVersion runtime. Build a new preview APK first."
+              exit 1
+            fi
+        - name: Typecheck
+          run: pnpm run typecheck
+        - name: Test
+          run: pnpm test
