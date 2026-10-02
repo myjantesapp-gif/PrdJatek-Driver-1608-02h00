@@ -1,7 +1,7 @@
 
 {
   "cli": {
-    "version": ">= 14.7.1",
+    "version": ">= 24.8.0",
     "appVersionSource": "local"
   },
   "build": {
@@ -12,8 +12,8 @@
       "env": {
         "npm_config_frozen_lockfile": "false",
         "PNPM_VERSION": "10.26.1",
-        "EXPO_PUBLIC_PROJECT_ID": "c7b51ba9-fdb7-46e2-9bc0-2ce54203a1f5",
-        "EXPO_OWNER": "jatekapp",
+        "EXPO_PUBLIC_PROJECT_ID": "38b2a449-33b2-4549-8f5f-c7f535d41a34",
+        "EXPO_OWNER": "jateksys",
         "EXPO_SLUG": "jatekdriver"
       },
       "android": {
@@ -23,19 +23,21 @@
     },
     "preview": {
       "distribution": "internal",
+      "environment": "preview",
       "autoIncrement": true,
       "channel": "preview",
       "credentialsSource": "remote",
       "env": {
         "npm_config_frozen_lockfile": "false",
-        "EXPO_PUBLIC_DOMAIN": "api.jatek.app",
-        "EXPO_PUBLIC_PROJECT_ID": "c7b51ba9-fdb7-46e2-9bc0-2ce54203a1f5",
+        "EXPO_PUBLIC_DOMAIN": "ma.jatek.app",
+        "EXPO_PUBLIC_PROJECT_ID": "38b2a449-33b2-4549-8f5f-c7f535d41a34",
         "PNPM_VERSION": "10.26.1",
-        "EXPO_OWNER": "jatekapp",
+        "EXPO_OWNER": "jateksys",
         "EXPO_SLUG": "jatekdriver"
       },
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "resourceClass": "medium"
       }
     },
     "production": {
@@ -43,11 +45,11 @@
       "channel": "production",
       "env": {
         "npm_config_frozen_lockfile": "false",
-        "EXPO_PUBLIC_DOMAIN": "api.jatek.app",
-        "EXPO_PUBLIC_API_URL": "https://api.jatek.app",
-        "EXPO_PUBLIC_PROJECT_ID": "c7b51ba9-fdb7-46e2-9bc0-2ce54203a1f5",
+        "EXPO_PUBLIC_DOMAIN": "ma.jatek.app",
+        "EXPO_PUBLIC_API_URL": "https://ma.jatek.app",
+        "EXPO_PUBLIC_PROJECT_ID": "38b2a449-33b2-4549-8f5f-c7f535d41a34",
         "PNPM_VERSION": "10.26.1",
-        "EXPO_OWNER": "jatekapp",
+        "EXPO_OWNER": "jateksys",
         "EXPO_SLUG": "jatekdriver"
       },
       "android": {

@@ -1,0 +1,32 @@
+name: Android preview OTA after push
+
+# Every branch push targets the shared preview channel, never production.
+# GitHub must be linked to this Expo project for push triggers to run.
+on:
+  push: {}
+
+jobs:
+  publish_update:
+    name: Publish Android preview OTA
+    type: update
+    environment: preview
+    env:
+      npm_config_frozen_lockfile: 'false'
+      PNPM_VERSION: '10.26.1'
+      EXPO_PUBLIC_DOMAIN: ma.jatek.app
+      EXPO_PUBLIC_PROJECT_ID: 38b2a449-33b2-4549-8f5f-c7f535d41a34
+      EXPO_OWNER: jateksys
+      EXPO_SLUG: jatekdriver
+    params:
+      platform: android
+      channel: preview
+    hooks:
+      before_update:
+        - name: Require unchanged native sources
+          run: node scripts/check-ota-native.cjs
+        - name: Typecheck
+          run: pnpm exec tsc --noEmit
+        - name: Test
+          run: pnpm exec vitest run --exclude tests/jatek-socket-delivery.smoke.test.ts
+        - name: Recheck native sources immediately before publication
+          run: node scripts/check-ota-native.cjs

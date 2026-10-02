@@ -4,9 +4,10 @@
 - [Orders not arriving — root causes](orders-not-arriving.md) — 3 bugs: busy→online reset, SSE useEffect/pollOrdersRef, 401 infinite loop
 - [Expo web preview startup](expo-web-preview.md) — use offline production-preview mode when DevTools cannot load its Linux shell
 - [Android notification permissions](android-notification-permissions.md) — prompt only from the undetermined state; denied users must use system settings to re-enable alerts
-- [Remote business API boundary](remote-api-cors.md) — use the documented ma.jatek.app origin only; do not add alternate origins or synthesize business data
-- [Realtime transport boundary](realtime-transport.md) — current Jatek backend documents SSE only; Socket.IO needs a server endpoint before replacing the existing stream
+- [Remote business API boundary](remote-api-cors.md) — keep ma.jatek.app primary; only use explicitly approved HTTPS failovers with the same contract
+- [Realtime transport boundary](realtime-transport.md) — current driver contract uses Socket.IO; SSE is historical, with polling as fallback
 - [Android hardware validation](android-hardware-validation.md) — this Replit workspace has no Android SDK, adb, emulator, or connected device; real APK checks require external hardware
 - [Cold-start notification routing](notification-cold-start.md) — wait for server-validated snapshot hydration before routing a notification tap to an active order
 - [EAS OTA versus native APK](eas-ota-native.md) — OTA updates JavaScript only; Android permissions and native modules require a new APK build
 - [Socket.IO backend boundary](socketio-backend-boundary.md) — the driver repo owns the client; ma.jatek.app must expose and validate the remote Socket.IO handshake
+- [GitHub binary uploads](github-binary-assets.md) — avoid shell stdout base64 for large files; read bytes directly and verify the Git blob hash

@@ -1,0 +1,10 @@
+name: Build Android preview APK
+
+# Manual only: OTA pushes do not start a native build automatically.
+jobs:
+  build_android:
+    name: Build Android internal preview APK
+    type: build
+    params:
+      platform: android
+      profile: preview

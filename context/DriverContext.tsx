@@ -313,6 +313,7 @@ const DriverContext = createContext<DriverContextType | null>(null);
  */
 const FALLBACK_POLL_MS = 3_000;
 const DRIVER_LOCATION_POLL_MS = 10_000;
+const DRIVER_HEARTBEAT_INTERVAL_MS = 30_000;
 
 type DriverCoordinates = {
   latitude: number;
@@ -800,13 +801,15 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
     syncLocation();
     locationIntervalRef.current = setInterval(syncLocation, DRIVER_LOCATION_POLL_MS);
-    const heartbeatInterval = setInterval(() => {
+    const sendHeartbeat = () => {
       if (!cancelled) {
         api.heartbeat(driverId).catch((err) => {
           console.warn('[DriverContext] driver heartbeat failed:', err);
         });
       }
-    }, 25_000);
+    };
+    sendHeartbeat();
+    const heartbeatInterval = setInterval(sendHeartbeat, DRIVER_HEARTBEAT_INTERVAL_MS);
 
     return () => {
       cancelled = true;
