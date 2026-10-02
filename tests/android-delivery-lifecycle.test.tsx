@@ -225,6 +225,28 @@ describe('Android delivery lifecycle smoke flow', () => {
     vi.restoreAllMocks();
   });
 
+  it.each(['accepted', 'confirmed', 'preparing', 'ready'])(
+    'shows a remote %s offer and preserves its distance in kilometers',
+    async (status) => {
+      getOrder.mockResolvedValue(serverOrder(status, null));
+      getAvailableOrders.mockResolvedValue([{
+        ...availableOrder(),
+        status,
+        distanceToPickupKm: 7.5,
+      }]);
+      let renderer!: ReturnType<typeof TestRenderer.create>;
+      await act(async () => {
+        renderer = TestRenderer.create(<DriverProvider><Probe /></DriverProvider>);
+      });
+      await settle();
+      expect(latest?.incomingOrder?.apiId).toBe(ORDER_ID);
+      expect(latest?.incomingOrder?.status).toBe('incoming');
+      expect(latest?.incomingOrder?.distance).toBe(7.5);
+      expect(latest?.activeOrder).toBeNull();
+      act(() => renderer.unmount());
+    },
+  );
+
   it('accepts a delivery, reconciles after Android backgrounding, and keeps the next action', async () => {
     let renderer!: ReturnType<typeof TestRenderer.create>;
     await act(async () => {

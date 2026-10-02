@@ -1,14 +1,16 @@
 {
-  "runtimeVersion": "1.0.0",
-  "verifiedAndroidVersionCode": 26,
+  "runtimeVersion": "1.0.1",
+  "verifiedAndroidVersionCode": 27,
+  "verifiedAndroidBuildId": "75caa2f9-07fc-45a7-990f-d1c78fe45976",
+  "verifiedSourceCommit": "7716e1374fe17d49b4d203f065548e0e0ea60d99",
   "snapshot": {
-    "config": "11b02ddb1e1d12ae5f2b0ae58c58560a0ca0b660ebb8d970045709d12208b435",
+    "config": "84e86147c76bf05554c328c88142d517d7bcf60b1eccd18d12506820dd9272de",
     "dependencies": "4dded22ed10ea627c314607a173c65611ff59cee19e05a935df3caedc715a664",
     "files": {
       "app.config.js": "75e8f7ad7f5778dd044e1b294181088990221cc445e60269aea059f524b76149",
-      "assets/android-icon-foreground.png": "a38b45785a8c15b7be459591a2240607749098aedb2848cc0bd152d79ad0a381",
       "assets/android-icon-monochrome.png": "f906eeffe1b6de1ea4f2ba77238bfd4050f534ab00be4655eaca1144b16a0ea2",
-      "assets/icon.png": "f99c011bdcd13f77d61b62177efc6770765b949a268259b64eaad8fc8c4edb10",
+      "assets/driver-icon-foreground.png": "e4e6a0449d058545431b6efa373634a635eb01a9c8a7c6c118f77f576d248715",
+      "assets/driver-icon.png": "f2f11cbe517a591e6be3477e12df610fdd0be001516663e65ff7a54af5ffd23e",
       "assets/notification-icon.png": "2cc72223fef728ebdd441ae1b11c01837b1741973fc880cfaa2c8f5e8ff3e4df",
       "assets/splash-icon.png": "f99c011bdcd13f77d61b62177efc6770765b949a268259b64eaad8fc8c4edb10",
       "pnpm-lock.yaml": "a0db169b120fbe074185545255f7705393dfbeb54327e7af3ef69114e69ab9ed"

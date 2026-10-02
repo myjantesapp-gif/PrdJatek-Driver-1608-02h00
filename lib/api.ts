@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ACTIVE_STATUS_ORDER } from './delivery-state';
 
 export const BASE_URL = 'https://ma.jatek.app';
 
@@ -141,6 +142,7 @@ export interface ApiOrder {
   estimatedPickupTime?: number;
   estimatedDeliveryTime?: number;
   distance?: number;
+  distanceToPickupKm?: number | null;
   rating?: number;
 }
 
@@ -269,6 +271,7 @@ export interface ApiAvailableOrder {
   kitchenCode?: string | null;
   pickupCode?: string | null;
   driverId?: number | null;
+  distanceToPickupKm?: number | null;
   items?: Array<{
     id?: number;
     menuItemName?: string;
@@ -728,7 +731,22 @@ export async function loadActiveOrderSnapshot<T>(driverId: number): Promise<T | 
   const raw = await AsyncStorage.getItem(`${ACTIVE_ORDER_KEY_PREFIX}${driverId}`);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as T;
+    const snapshot: unknown = JSON.parse(raw);
+    const record = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
+      ? snapshot as Record<string, unknown>
+      : null;
+    if (
+      !record ||
+      typeof record.apiId !== 'number' ||
+      !Number.isInteger(record.apiId) ||
+      record.apiId <= 0 ||
+      record.id !== String(record.apiId) ||
+      !ACTIVE_STATUS_ORDER.some(status => status === record.status)
+    ) {
+      await clearActiveOrderSnapshot(driverId);
+      return null;
+    }
+    return snapshot as T;
   } catch {
     await clearActiveOrderSnapshot(driverId);
     return null;

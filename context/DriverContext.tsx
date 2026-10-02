@@ -27,6 +27,7 @@ import { useAuth } from '@/context/AuthContext';
 import {
   ACTIVE_STATUS_ORDER,
   isReadyForPickupStatus,
+  isDriverOfferStatus,
   isAllowedStatusTransition,
   mapApiStatus,
   shouldRetainActiveDelivery,
@@ -218,7 +219,7 @@ function mapAvailableOrder(order: ApiAvailableOrder): Order {
     },
     items,
     earnings: deliveryFee,
-    distance: 0,
+    distance: Math.max(0, Number(order.distanceToPickupKm) || 0),
     estimatedPickup: 0,
     estimatedDelivery: order.estimatedDeliveryTime ?? 0,
     // The customer OTP is generated/returned when the order is accepted.
@@ -246,7 +247,7 @@ function mapApiOrder(apiOrder: ApiOrder, driverId: number): Order {
   const deliveryFee = Number(apiOrder.deliveryFee) || 0;
   const earnings = deliveryFee + tip;
 
-  const distance = Number(apiOrder.distance) || 0;
+  const distance = Math.max(0, Number(apiOrder.distanceToPickupKm ?? apiOrder.distance) || 0);
 
   // Fall back to 'incoming' for unmapped statuses so the order is not dropped
   const mappedStatus = mapApiStatus(apiOrder.status) ?? 'incoming';
@@ -348,6 +349,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     useState<PushNotificationStatus>('unknown');
   const statusRef = useRef<DriverStatus>(status);
   const activeOrderHydratedRef = useRef(false);
+  const driverSessionEpochRef = useRef(0);
   const profileAvailabilityRef = useRef<boolean | null>(null);
 
   const seenOrderIds = useRef<Set<number>>(new Set());
@@ -441,6 +443,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   // Reset seen-order tracking whenever the driver identity changes (login/logout)
   useEffect(() => {
     let cancelled = false;
+    driverSessionEpochRef.current += 1;
     activeOrderHydratedRef.current = false;
     seenOrderIds.current.clear();
     pendingQueueRef.current = [];
@@ -453,6 +456,21 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     latestStatusUpdateRef.current = null;
     acceptingOrderIdRef.current = null;
     profileAvailabilityRef.current = null;
+    // These are server-response caches, not a local order database. Never carry
+    // another account's offers/history into an offline or failed sync.
+    lastOrdersRef.current = [];
+    lastAvailableOrdersRef.current = [];
+    incomingOrderRef.current = null;
+    if (incomingTimerRef.current) {
+      clearTimeout(incomingTimerRef.current);
+      incomingTimerRef.current = null;
+    }
+    setIncomingOrder(null);
+    setHistory([]);
+    setEarnings({ today: 0, week: 0, month: 0 });
+    setStats({ deliveriesToday: 0, deliveriesTotal: 0, rating: 0 });
+    setIsApiConnected(false);
+    setLastSyncAt(null);
 
     activeOrderRef.current = null;
     pendingNotificationResponseRef.current = null;
@@ -486,7 +504,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           try {
             const remoteOrder = await api.getOrder(savedOrder.apiId);
             const remoteStatus = mapApiStatus(remoteOrder.status);
-            const hasOwnershipFields = hasConcreteDriverOwnership(remoteOrder);
             const belongsToDriver =
               sameDriverId(remoteOrder.driverId, driverId) ||
               sameDriverId(remoteOrder.assignedDriverId, driverId);
@@ -494,7 +511,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
               remoteStatus !== null && ACTIVE_STATUS_ORDER.includes(remoteStatus);
             if (
               !isValidApiOrderResponse(remoteOrder, savedOrder.apiId) ||
-              (hasOwnershipFields && !belongsToDriver) ||
+              !belongsToDriver ||
               !isRemoteActive
             ) {
               await clearActiveOrderSnapshot(driverId);
@@ -902,9 +919,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       if (cachedEnriched) {
         setIncomingOrder(cachedEnriched);
       } else if (driverId) {
+        const sessionEpoch = driverSessionEpochRef.current;
         api.getOrder(order.apiId).then((full) => {
+          if (sessionEpoch !== driverSessionEpochRef.current) return;
           const fullStatusIsReady =
-            isReadyForPickupStatus(full.status) ||
+            isDriverOfferStatus(full.status) ||
             mapApiStatus(full.status) === 'incoming';
           const hasOwnershipFields = hasConcreteDriverOwnership(full);
           const belongsToDriver =
@@ -913,7 +932,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           const belongsToAnotherDriver = hasOwnershipFields && !belongsToDriver;
           if (fullStatusIsReady && !belongsToAnotherDriver) {
             const enriched = mapApiOrder(full, driverId);
-            const withIncoming = { ...enriched, status: 'incoming' as const };
+            const withIncoming = {
+              ...enriched,
+              distance: enriched.distance || order.distance,
+              status: 'incoming' as const,
+            };
             enrichedOrderCache.current.set(order.apiId, withIncoming);
             // Update the displayed alert if it's still showing this order
             setIncomingOrder((current) =>
@@ -924,6 +947,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
             advanceQueueRef.current();
           }
         }).catch((err) => {
+          if (sessionEpoch !== driverSessionEpochRef.current) return;
           if (err instanceof ApiError && err.status === 404) {
             discardStaleOffer(order.apiId);
             advanceQueueRef.current();
@@ -959,6 +983,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     // active synchronization so no stale response can overwrite newer UI, and
     // callers that need reconciliation can wait for it to finish.
     if (pollInFlightRef.current) return pollInFlightRef.current;
+    const sessionEpoch = driverSessionEpochRef.current;
 
     const poll = (async () => {
       try {
@@ -972,6 +997,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           ? api.getOrder(localActiveOrder.apiId)
           : Promise.resolve(null as ApiOrder | null),
       ]);
+      // A request started before logout/account switching cannot restore the
+      // cleared offers or delivery history after the new session starts.
+      if (sessionEpoch !== driverSessionEpochRef.current) return;
 
       const assignedRequestSucceeded = (
         assignedResult.status === 'fulfilled' && Array.isArray(assignedResult.value)
@@ -1231,7 +1259,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         const authoritativeIncomingIds = new Set([
           ...pendingAssigned.map((o) => o.id),
           ...available
-            .filter((o) => isReadyForPickupStatus(o.status))
+            .filter((o) => isDriverOfferStatus(o.status))
             .map((o) => o.id),
         ]);
         const allIncoming = [
@@ -1239,9 +1267,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           ...available
             .filter((o) => {
               if (suppressedOfferIds.current.has(o.id)) return false;
-              // The available queue is strictly for orders ready for pickup.
-              // Never surface accepted/in-progress/old records as new offers.
-              return isReadyForPickupStatus(o.status);
+              // The backend also offers shop-accepted/preparing orders.
+              // Still exclude picked-up, delivered and cancelled records.
+              return isDriverOfferStatus(o.status);
             })
             .map((o) => o.id),
         ];
@@ -1276,8 +1304,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
             // Pre-fetch full order details so coordinates are ready when alert shows
             if (!enrichedOrderCache.current.has(id) && driverId) {
               api.getOrder(id).then((full) => {
+                if (sessionEpoch !== driverSessionEpochRef.current) return;
                 const fullStatusIsReady =
-                  isReadyForPickupStatus(full.status) ||
+                  isDriverOfferStatus(full.status) ||
                   mapApiStatus(full.status) === 'incoming';
                 const hasOwnershipFields = hasConcreteDriverOwnership(full);
                 const belongsToDriver =
@@ -1286,16 +1315,23 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
                 const belongsToAnotherDriver = hasOwnershipFields && !belongsToDriver;
                 if (fullStatusIsReady && !belongsToAnotherDriver) {
                   const mapped = mapApiOrder(full, driverId);
-                  enrichedOrderCache.current.set(id, { ...mapped, status: 'incoming' });
+                  const withIncoming = {
+                    ...mapped,
+                    distance: mapped.distance ||
+                      Math.max(0, Number(available.find(order => order.id === id)?.distanceToPickupKm) || 0),
+                    status: 'incoming' as const,
+                  };
+                  enrichedOrderCache.current.set(id, withIncoming);
                   // If this order is currently being displayed, update it live
                   setIncomingOrder((current) =>
-                    current?.apiId === id ? { ...mapped, status: 'incoming' } : current,
+                    current?.apiId === id ? withIncoming : current,
                   );
                 } else if (belongsToAnotherDriver) {
                   discardStaleOffer(id);
                   advanceQueueRef.current();
                 }
               }).catch((err) => {
+                if (sessionEpoch !== driverSessionEpochRef.current) return;
                 if (err instanceof ApiError && err.status === 404) {
                   discardStaleOffer(id);
                   advanceQueueRef.current();
@@ -1316,7 +1352,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       }
       } catch (err) {
         console.warn('[DriverContext] pollOrders failed:', err);
-        setIsApiConnected(false);
+        if (sessionEpoch === driverSessionEpochRef.current) setIsApiConnected(false);
       } finally {
         pollInFlightRef.current = null;
       }

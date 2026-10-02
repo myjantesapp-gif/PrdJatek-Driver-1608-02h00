@@ -9,7 +9,7 @@
 - Android package: `com.jatek.driver`
 - Environment and update channel: `preview`
 - Build profile: `preview`, internal APK, Linux Medium, remote signing credentials
-- Android version code baseline: 26. The next preview build auto-increments it.
+- Android version code baseline: 27. The next preview build auto-increments it.
 
 Build IDs and fingerprints are outputs of a build, not reusable configuration
 values. Never set the abbreviated fingerprint from a dashboard as the runtime.
@@ -36,19 +36,24 @@ The workflow:
 4. Runs fixed typecheck/test commands, then rechecks native inputs immediately
    before publishing the Android OTA.
 
-The initial baseline is for the verified Android APK version code 26, runtime
-`1.0.0`. It is stored in `.eas/ota-native-baseline.json` and enforced by
+The current baseline is for the finished Android APK version code 27, runtime
+`1.0.1`. It is stored in `.eas/ota-native-baseline.json` and enforced by
 `scripts/check-ota-native.cjs`. This deliberately compares source semantics,
 not a cross-environment EAS fingerprint: the initial live run showed different
 fingerprints despite unchanged native source and dependencies.
 
-The new driver icon is configured for the `1.0.1` native release. Until that
-APK finishes successfully and its source baseline is reviewed, OTA publication
-is intentionally blocked. The older `1.0.0` runtime stays isolated.
+The new driver icon is included in the finished `1.0.1` native release.
+Its native source baseline has been reviewed against the build source.
+The older `1.0.0` runtime stays isolated; install APK 27 to receive new updates.
 
 All business REST requests and Socket.IO connections use only
 `https://ma.jatek.app`. There is no local business database, generated order
 feed, alternate origin, or environment-controlled backend override.
+`api.jatek.app` also responds to the remote contract, but is not used as an
+automatic fallback. Available offers include `accepted`, `confirmed`,
+`preparing`, and `ready`; distance display uses the server's kilometer value.
+Malformed/terminal local delivery snapshots are removed, and account changes
+clear in-memory offers/history without deleting remote business data.
 
 Do not refresh the baseline just to bypass a failure. After bumping the runtime,
 building and validating a new APK, review its source and explicitly regenerate

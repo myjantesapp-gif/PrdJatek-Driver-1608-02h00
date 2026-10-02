@@ -3,7 +3,7 @@ name: EAS OTA versus native APK
 description: Distinction between preview OTA updates and native Android rebuilds for Jatek Driver
 ---
 
-An EAS Update on the `preview` channel can deliver JavaScript and bundled assets to compatible runtime version `1.0.0` APKs, but it cannot add Android manifest permissions or native modules.
+An EAS Update on the `preview` channel can deliver JavaScript and bundled assets to APKs with a matching compatible runtime, but it cannot add Android manifest permissions or native modules.
 
 **Why:** Android notification/location permissions and packages such as react-native-worklets are compiled into the APK; a successful OTA does not prove the native binary contains them.
 

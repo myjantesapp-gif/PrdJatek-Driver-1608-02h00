@@ -54,6 +54,13 @@ export function isReadyForPickupStatus(apiStatus?: string): boolean {
   return normalized === 'ready' || normalized === 'ready_for_pickup';
 }
 
+/** Statuses the remote /orders/available contract can advertise to drivers. */
+export function isDriverOfferStatus(apiStatus?: string): boolean {
+  const normalized = apiStatus?.trim().toLowerCase().replace(/[\s-]+/g, '_') ?? '';
+  return ['accepted', 'confirmed', 'preparing'].includes(normalized) ||
+    isReadyForPickupStatus(apiStatus);
+}
+
 export function isAllowedStatusTransition(from: DeliveryStatus, to: DeliveryStatus) {
   switch (from) {
     case 'accepted':
