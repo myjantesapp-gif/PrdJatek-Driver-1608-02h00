@@ -608,10 +608,10 @@ class JatekApi {
     })();
   }
 
-  async updateOrderStatus(orderId: number, status: string, extra?: Record<string, unknown>): Promise<ApiOrder> {
+  async updateOrderStatus(orderId: number, status: string): Promise<ApiOrder> {
     const response = await this.request<unknown>(`/api/orders/${orderId}/status`, {
       method: 'PATCH',
-      body: JSON.stringify({ status, ...extra }),
+      body: JSON.stringify({ status }),
     }, true, true);
     return unwrapOrderResponse(response, orderId) ?? this.getOrder(orderId);
   }
@@ -663,6 +663,27 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.status = status;
     this.data = data;
+  }
+}
+
+export function getDeliveryConfirmationErrorMessage(error: unknown): string {
+  if (!(error instanceof ApiError)) {
+    return 'Impossible de confirmer la livraison. Vérifiez votre connexion puis réessayez.';
+  }
+  const code = (error.data as { code?: string } | null)?.code;
+  switch (code) {
+    case 'INVALID_PICKUP_CODE_FORMAT':
+      return 'Le code doit contenir exactement 4 chiffres.';
+    case 'INVALID_PICKUP_CODE':
+      return 'Code incorrect. Vérifiez le code avec le client.';
+    case 'DELIVERY_CODE_EXPIRED':
+      return 'Le code de livraison a expiré. Demandez un nouveau code au client.';
+    case 'DELIVERY_CODE_ALREADY_USED':
+      return 'Ce code a déjà été utilisé. La livraison doit être resynchronisée avant de continuer.';
+    case 'DELIVERY_NOT_READY':
+      return 'Confirmez votre arrivée chez le client avant de saisir son code.';
+    default:
+      return error.message;
   }
 }
 

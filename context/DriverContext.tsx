@@ -34,6 +34,7 @@ import {
   shouldRollbackOptimisticStatus,
   type DeliveryStatus,
 } from '@/lib/delivery-state';
+import { getDeliveryConfirmationErrorMessage } from '@/lib/api';
 
 export type DriverStatus = 'online' | 'offline' | 'busy';
 export type PushNotificationStatus =
@@ -115,11 +116,10 @@ export interface DeliveryHistory extends Order {
 function mapAppStatusToApi(appStatus: Order['status']): string {
   switch (appStatus) {
     case 'accepted':      return 'accepted';
-    case 'at_restaurant': return 'at_restaurant';
+    case 'at_restaurant': return 'driver_at_restaurant';
     case 'picked_up':     return 'picked_up';
-    // The app calls this visual state "delivering"; the driver API calls the
-    // first transition after pickup "en_route".
-    case 'delivering':    return 'en_route';
+    case 'en_route':      return 'en_route';
+    case 'delivering':    return 'out_for_delivery';
     case 'completed':     return 'delivered';
     case 'cancelled':     return 'cancelled';
     default:              return appStatus;
@@ -1728,7 +1728,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       suppressedOfferIds.current.add(incomingOrder.apiId);
       incomingOrderRef.current = null;
       enrichedOrderCache.current.delete(incomingOrder.apiId);
-      api.updateOrderStatus(incomingOrder.apiId, 'rejected').catch(() => {});
+      // Declining an unassigned offer is local; the remote driver contract
+      // neither permits "rejected" nor authorizes changing another offer.
     }
     advanceQueueRef.current();
   }, [incomingOrder]);
@@ -1801,7 +1802,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       const updated = await api.updateOrderStatus(
         orderId,
         mapAppStatusToApi(newStatus),
-        { driverId },
       );
       if (!isValidApiOrderResponse(updated, orderId)) {
         throw new Error('Réponse de statut invalide du serveur.');
@@ -1887,7 +1887,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         setActiveOrder(previousOrder);
         persistActiveOrderSnapshot(previousOrder);
       }
-      if (!shouldRollback && confirmedStatus?.orderId === id) return true;
+      if (
+        !shouldRollback &&
+        confirmedStatus?.orderId === id &&
+        ACTIVE_STATUS_ORDER.indexOf(confirmedStatus.status) >= ACTIVE_STATUS_ORDER.indexOf(newStatus)
+      ) return true;
       const message = err instanceof ApiError
         ? err.message
         : err instanceof Error
@@ -1903,12 +1907,42 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const validateOTP = useCallback(async (id: string, code: string): Promise<boolean> => {
     const currentOrder = activeOrderRef.current;
     if (!currentOrder || currentOrder.id !== id || isConfirmingDeliveryRef.current) return false;
-    if (code.length !== 4 || !driverId) return false;
+    if (!/^\d{4}$/.test(code) || !driverId) return false;
+    if (currentOrder.status !== 'delivering' || isUpdatingStatusRef.current) {
+      Alert.alert('Livraison non confirmée', 'Confirmez votre arrivée chez le client avant de saisir son code.');
+      return false;
+    }
 
     isConfirmingDeliveryRef.current = true;
     const orderToComplete = currentOrder;
+    const sessionEpoch = driverSessionEpochRef.current;
     try {
-      const confirmed = await api.confirmDelivery(orderToComplete.apiId, code);
+      const confirmed = await api.confirmDelivery(orderToComplete.apiId, code).catch(async (error) => {
+        // The server can commit before a timeout, or report a consumed code
+        // after a duplicate tap. Never infer completion from the error alone.
+        const remote = await api.getOrder(orderToComplete.apiId).catch(() => null);
+        if (sessionEpoch !== driverSessionEpochRef.current) throw error;
+        if (
+          remote &&
+          isValidApiOrderResponse(remote, orderToComplete.apiId) &&
+          (sameDriverId(remote.driverId, driverId) || sameDriverId(remote.assignedDriverId, driverId))
+        ) {
+          if (mapApiStatus(remote.status) === 'completed') return remote;
+          const reconciled = mergeOrderWithServer(orderToComplete, mapApiOrder(remote, driverId));
+          if (reconciled.status === 'cancelled') {
+            setTerminalOrder(reconciled);
+            activeOrderRef.current = null;
+            setActiveOrder(null);
+            queueActiveSnapshotWrite(() => clearActiveOrderSnapshot(driverId), 'clear cancelled delivery');
+          } else {
+            activeOrderRef.current = reconciled;
+            setActiveOrder(reconciled);
+            persistActiveOrderSnapshot(reconciled);
+          }
+        }
+        throw error;
+      });
+      if (sessionEpoch !== driverSessionEpochRef.current) return false;
       if (
         !isValidApiOrderResponse(confirmed, orderToComplete.apiId) ||
         mapApiStatus(confirmed.status) !== 'completed'
@@ -1964,16 +1998,17 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
       return true;
     } catch (err) {
+      if (sessionEpoch !== driverSessionEpochRef.current) return false;
       console.warn('[DriverContext] delivery completion failed:', err);
       Alert.alert(
         'Livraison non confirmée',
-        'Impossible de confirmer la livraison. Vérifiez le code et votre connexion.',
+        getDeliveryConfirmationErrorMessage(err),
       );
       return false;
     } finally {
       isConfirmingDeliveryRef.current = false;
     }
-  }, [driverId, queueActiveSnapshotWrite]);
+  }, [driverId, queueActiveSnapshotWrite, persistActiveOrderSnapshot]);
 
   const refreshEarnings = useCallback(() => {
     if (!driverId) return;

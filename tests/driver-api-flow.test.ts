@@ -18,6 +18,27 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('documented driver API flow', () => {
+  it('uses strict JWT status payloads and reconciles an empty confirmation response', async () => {
+    api.setToken('fixture-token');
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    for (const status of ['driver_at_restaurant', 'picked_up', 'en_route', 'out_for_delivery']) {
+      fetchMock.mockResolvedValueOnce(jsonResponse({ id: 103, status, driverId: 7 }));
+    }
+    fetchMock.mockResolvedValueOnce(new Response('', { status: 200 }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ id: 103, status: 'delivered', driverId: 7 }));
+    for (const status of ['driver_at_restaurant', 'picked_up', 'en_route', 'out_for_delivery']) {
+      await expect(api.updateOrderStatus(103, status)).resolves.toMatchObject({ status });
+    }
+    await expect(api.confirmDelivery(103, '7364')).resolves.toMatchObject({ status: 'delivered' });
+    expect(fetchMock.mock.calls.slice(0, 4).map((call) => JSON.parse(String(call[1]?.body))))
+      .toEqual(['driver_at_restaurant', 'picked_up', 'en_route', 'out_for_delivery'].map(status => ({ status })));
+    expect(JSON.parse(String(fetchMock.mock.calls[4][1]?.body))).toEqual({ pickupCode: '7364' });
+    for (const [url, options] of fetchMock.mock.calls) {
+      expect(String(url)).toMatch(/^https:\/\/ma\.jatek\.app\/api\/orders\//);
+      expect(options?.headers).toMatchObject({ Authorization: 'Bearer fixture-token' });
+    }
+  });
+
   it('uses the driver ownership filter when loading assigned deliveries', async () => {
     const orders = [{ id: 501, status: 'accepted', driverId: 7 }];
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse(orders));
@@ -87,7 +108,7 @@ describe('documented driver API flow', () => {
       .mockResolvedValueOnce(jsonResponse(deliveredOrder));
 
     await expect(api.acceptDelivery(103, 7)).resolves.toMatchObject(acceptedOrder);
-    await expect(api.updateOrderStatus(103, 'en_route', { driverId: 7 }))
+    await expect(api.updateOrderStatus(103, 'en_route'))
       .resolves.toMatchObject(enRouteOrder);
     await expect(api.confirmDelivery(103, '7364')).resolves.toMatchObject(deliveredOrder);
 
@@ -99,7 +120,6 @@ describe('documented driver API flow', () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ driverId: 7 });
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
       status: 'en_route',
-      driverId: 7,
     });
     expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({
       pickupCode: '7364',

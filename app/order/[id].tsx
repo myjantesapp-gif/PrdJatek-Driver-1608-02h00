@@ -27,7 +27,8 @@ const STEPS = [
   { key: 'accepted', label: 'Commande acceptée', icon: 'checkmark-circle-outline' as const },
   { key: 'at_restaurant', label: 'Au restaurant', icon: 'storefront-outline' as const },
   { key: 'picked_up', label: 'Commande récupérée', icon: 'bag-check-outline' as const },
-  { key: 'delivering', label: 'En livraison', icon: 'bicycle-outline' as const },
+  { key: 'en_route', label: 'En route vers le client', icon: 'bicycle-outline' as const },
+  { key: 'delivering', label: 'Arrivé chez le client', icon: 'location-outline' as const },
   { key: 'completed', label: 'Livré — OTP requis', icon: 'lock-closed-outline' as const },
 ];
 
@@ -311,7 +312,7 @@ export default function OrderDetailScreen() {
           )}
         </View>
 
-        {isDelivering && !otpSuccess && (
+        {isDelivering && !otpSuccess && !advancing && (
           <View style={styles.otpSection}>
             <View style={styles.otpHeader}>
               <Ionicons name="lock-closed" size={22} color={Colors.primary} />
@@ -322,7 +323,7 @@ export default function OrderDetailScreen() {
             </Text>
             <OTPInput key={otpKey} length={4} onComplete={handleOTP} error={otpError} />
             {otpError && (
-              <Text style={styles.otpError}>Code incorrect. Vérifiez avec le client.</Text>
+              <Text style={styles.otpError}>Confirmation impossible. Consultez le message affiché.</Text>
             )}
           </View>
         )}

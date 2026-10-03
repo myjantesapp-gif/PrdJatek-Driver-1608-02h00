@@ -23,7 +23,7 @@ Base URL: `https://ma.jatek.app`
 
 **How to apply:** Scope assigned-order requests to the authenticated driver. Treat successful empty offers separately from failed offer requests; a working profile or assigned endpoint does not prove offers are accessible.
 - `GET /api/orders/:id` — full order details (includes items, customer, all coords). Use after accepting to enrich data.
-- `PATCH /api/orders/:id/status` — `{status, driverId?, otp?}` → updated order. Returns "Not authorized to accept orders for this restaurant" if driver not linked to that restaurant on backend.
+- `PATCH /api/orders/:id/status` — `{status}` only for driver milestones. `driverId` is rejected; assignment uses the dedicated acceptance endpoint, and delivery confirmation uses the dedicated code endpoint.
 
 ## /api/orders/available response shape (DIFFERENT from ApiOrder)
 - `restaurantName` (flat string, not nested shop object)
@@ -57,9 +57,10 @@ Base URL: `https://ma.jatek.app`
 ## Status mutation response
 - Status mutation consumers should reconcile with `GET /api/orders/:id` when `PATCH /api/orders/:id/status` returns an empty body or a wrapper such as `{order: ...}`. Do not treat the mutation as failed solely because its response is not a flat order.
 
-## Live assignment inconsistency
-- In live testing, `accept-delivery` can return `status: "accepted"` while `/api/orders/:id/status` rejects `picked_up` as an invalid current state; do not assume the documented `ready → picked_up` transition is deployed.
+## Strict remote driver milestones
+- The consulted backend requires assignment → `driver_at_restaurant` → `picked_up` → `en_route` → `out_for_delivery`, then code confirmation. Assignment may be returned as `assigned` or legacy `accepted`.
+- Code responses distinguish incorrect, expired, already-used and delivery-not-ready cases. An already-used error alone does not prove this client completed delivery; verify the remote order before reporting success.
 
-**Why:** The mobile flow can become stuck after a successful-looking accept if the backend assignment and status state machine are out of sync.
+**Why:** Skipping restaurant arrival or treating departure as arrival causes valid-looking client actions to be rejected by the backend. These requirements were confirmed against the remote backend source, not inferred from the driver UI.
 
-**How to apply:** Keep the accepted delivery visible and report the server response; resolve the backend transition contract before adding client-side status coercion or falsely completing the order.
+**How to apply:** Preserve all milestones in the client, retain active deliveries on errors, and reconcile lost/empty mutation responses with authenticated order details. Contract alignment is client-only: do not change the remote database or create real orders for validation.

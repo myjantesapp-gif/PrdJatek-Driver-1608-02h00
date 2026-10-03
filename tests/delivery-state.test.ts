@@ -128,15 +128,16 @@ describe('order detail terminal controls', () => {
   );
 
   it('keeps the expected action labels for active states', () => {
-    expect(getNextOrderStatusLabel('accepted')).toBe('Confirmer la récupération');
+    expect(getNextOrderStatusLabel('accepted')).toBe('Je suis au restaurant');
     expect(getNextOrderStatusLabel('at_restaurant')).toBe('Commande récupérée');
     expect(getNextOrderStatusLabel('picked_up')).toBe('En route vers le client');
   });
 
   it('follows the documented driver status sequence', () => {
-    expect(getNextDeliveryStatus('accepted')).toBe('picked_up');
+    expect(getNextDeliveryStatus('accepted')).toBe('at_restaurant');
     expect(getNextDeliveryStatus('at_restaurant')).toBe('picked_up');
-    expect(getNextDeliveryStatus('picked_up')).toBe('delivering');
+    expect(getNextDeliveryStatus('picked_up')).toBe('en_route');
+    expect(getNextDeliveryStatus('en_route')).toBe('delivering');
     expect(getNextDeliveryStatus('delivering')).toBe(null);
   });
 
