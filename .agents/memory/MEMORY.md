@@ -11,4 +11,5 @@
 - [EAS OTA versus native APK](eas-ota-native.md) — OTA updates JavaScript only; Android permissions and native modules require a new APK build
 - [Socket.IO backend boundary](socketio-backend-boundary.md) — the driver repo owns the client; ma.jatek.app must expose and validate the remote Socket.IO handshake
 - [GitHub binary uploads](github-binary-assets.md) — avoid shell stdout base64 for large files; read bytes directly and verify the Git blob hash
+- [GitHub connector rate limits](github-proxy-rate-limits.md) — throttle writes; use inline tree contents for text and verify tree hashes before updating the branch
 - [Native icon color profiles](native-icon-color-profiles.md) — PNG padding/resizing must preserve ICC profiles or convert correctly to sRGB
