@@ -52,6 +52,26 @@ describe('order detail strict driver actions', () => {
     vi.clearAllMocks();
   });
 
+  it('displays the remote total in MAD instead of inventing a subtotal from items', async () => {
+    driver.activeOrder = {
+      ...order('accepted'),
+      earnings: 25.5,
+      total: 99.75,
+      items: [{ name: 'Article', quantity: 2, price: 1.5 }],
+    };
+    await act(async () => { renderer = TestRenderer.create(<OrderDetailScreen />); });
+    const rendered = JSON.stringify(renderer!.toJSON());
+    expect(rendered).toContain('99.75 MAD');
+    expect(rendered).toContain('25.50 MAD');
+    expect(rendered).not.toContain('€');
+  });
+
+  it('does not invent a total when the remote order omits it', async () => {
+    driver.activeOrder = order('accepted');
+    await act(async () => { renderer = TestRenderer.create(<OrderDetailScreen />); });
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Montant indisponible');
+  });
+
   it.each([
     ['accepted', 'Je suis au restaurant', 'at_restaurant'],
     ['at_restaurant', 'Commande récupérée', 'picked_up'],

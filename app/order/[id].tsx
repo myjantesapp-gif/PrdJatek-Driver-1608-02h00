@@ -1,3 +1,4 @@
+import { formatMAD } from '@/lib/money';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -218,7 +219,6 @@ export default function OrderDetailScreen() {
 
   const isDelivering = canConfirmDelivery(order.status);
   const totalItems = order.items.reduce((s, i) => s + i.quantity, 0);
-  const subtotal = order.items.reduce((s, i) => s + i.price * i.quantity, 0);
 
   const nextLabel = getNextOrderStatusLabel(order.status);
 
@@ -230,7 +230,7 @@ export default function OrderDetailScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{order.reference}</Text>
         <View style={styles.earningsBadge}>
-          <Text style={styles.earningsText}>{order.earnings.toFixed(2)} €</Text>
+          <Text style={styles.earningsText}>{formatMAD(order.earnings)}</Text>
         </View>
       </View>
 
@@ -298,17 +298,17 @@ export default function OrderDetailScreen() {
                 <Text style={styles.itemQty}>{item.quantity}</Text>
               </View>
               <Text style={styles.itemName}>{item.name}</Text>
-              <Text style={styles.itemPrice}>{(item.price * item.quantity).toFixed(2)} €</Text>
+              <Text style={styles.itemPrice}>{formatMAD(item.price * item.quantity)}</Text>
             </View>
           ))}
           <View style={styles.subtotalRow}>
-            <Text style={styles.subtotalLabel}>Sous-total</Text>
-            <Text style={styles.subtotalValue}>{subtotal.toFixed(2)} €</Text>
+            <Text style={styles.subtotalLabel}>Total commande</Text>
+            <Text style={styles.subtotalValue}>{formatMAD(order.total)}</Text>
           </View>
           {order.tip > 0 && (
             <View style={styles.subtotalRow}>
               <Text style={styles.subtotalLabel}>Pourboire</Text>
-              <Text style={[styles.subtotalValue, { color: Colors.success }]}>+{order.tip.toFixed(2)} €</Text>
+              <Text style={[styles.subtotalValue, { color: Colors.success }]}>+{formatMAD(order.tip)}</Text>
             </View>
           )}
         </View>
@@ -333,7 +333,7 @@ export default function OrderDetailScreen() {
           <View style={styles.successBox}>
             <Ionicons name="checkmark-circle" size={40} color={Colors.success} />
             <Text style={styles.successTitle}>Livraison confirmée !</Text>
-            <Text style={styles.successSub}>+{order.earnings.toFixed(2)} € ajoutés</Text>
+            <Text style={styles.successSub}>Livraison enregistrée — {formatMAD(order.earnings)}</Text>
           </View>
         )}
 

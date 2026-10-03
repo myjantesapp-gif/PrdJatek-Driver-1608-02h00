@@ -1,3 +1,4 @@
+import { formatMAD } from '@/lib/money';
 import React from 'react';
 import {
   View,
@@ -36,7 +37,7 @@ function HistoryItem({ item }: { item: DeliveryHistory }) {
         </View>
       </View>
       <View style={styles.itemRight}>
-        <Text style={styles.itemEarnings}>+{item.earnings.toFixed(2)} €</Text>
+        <Text style={styles.itemEarnings}>+{formatMAD(item.earnings)}</Text>
         {item.rating !== undefined && (
           <View style={styles.ratingRow}>
             {Array.from({ length: item.rating }).map((_, i) => (
@@ -70,7 +71,7 @@ export default function HistoryScreen() {
         </View>
         <View style={styles.summaryCard}>
           <Text style={[styles.summaryValue, { color: Colors.success }]}>
-            {earnings.month.toFixed(0)} €
+            {formatMAD(earnings.month)}
           </Text>
           <Text style={styles.summaryLabel}>Ce mois</Text>
         </View>

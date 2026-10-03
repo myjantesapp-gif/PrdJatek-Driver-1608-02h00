@@ -3,9 +3,9 @@ name: Remote business API boundary
 description: Defines the exclusive remote business-data origin and the separate browser CORS requirement.
 ---
 
-**Rule:** Jatek Driver must communicate exclusively with the remote Jatek backend. The user allows `ma.jatek.app` or `api.jatek.app`; keep `ma.jatek.app` as the canonical origin unless a deliberate switch is justified. No arbitrary origin, local backend/database, mock order feed, or automatic failover.
+**Rule:** Jatek Driver must communicate exclusively with `https://api.jatek.app` for business data, REST and Socket.IO. No alternate origin, local backend/database, mock order feed, or automatic failover. Backend monetary amounts are in MAD, not EUR; do not convert them or invent totals locally.
 
-**Why:** On 2026-10-02 the user explicitly replaced the earlier failover request with an exclusive remote-backend requirement while reporting recurring €25 orders. Do not hide those orders with amount-based client filtering; legitimate orders may have that amount.
+**Why:** On 2026-10-03 the user explicitly required “absolument api.jatek.app” and amounts in MAD from the remote backend. This replaces the previous canonical origin. Do not hide orders using amount-based filtering.
 
 **How to apply:** Keep REST and Socket.IO on the same remote origin and report outages explicitly. Investigate recurring orders at their backend source, identify exact records and creator jobs before an approved cleanup, and do not put private backend credentials into the mobile app. Browser CORS must be configured on the remote backend.
 

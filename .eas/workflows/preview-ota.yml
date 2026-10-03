@@ -13,7 +13,7 @@ jobs:
     env:
       npm_config_frozen_lockfile: 'false'
       PNPM_VERSION: '10.26.1'
-      EXPO_PUBLIC_DOMAIN: ma.jatek.app
+      EXPO_PUBLIC_DOMAIN: api.jatek.app
       EXPO_PUBLIC_PROJECT_ID: 38b2a449-33b2-4549-8f5f-c7f535d41a34
       EXPO_OWNER: jateksys
       EXPO_SLUG: jatekdriver

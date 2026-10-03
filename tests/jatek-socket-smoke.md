@@ -1,6 +1,6 @@
 # Smoke test Socket.IO de production
 
-Ce test vérifie le contrat réellement déployé sur `https://ma.jatek.app` :
+Ce test vérifie le contrat réellement déployé sur `https://api.jatek.app` :
 
 1. le preflight autorise `https://driver.jatek.app` ;
 2. `/socket.io/` renvoie une trame Engine.IO v4 et non du HTML ;

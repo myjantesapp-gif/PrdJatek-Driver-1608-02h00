@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ACTIVE_STATUS_ORDER } from './delivery-state';
 
-export const BASE_URL = 'https://ma.jatek.app';
+export const BASE_URL = 'https://api.jatek.app';
 
 /** The only origin authorized to serve Jatek Driver business data. */
 export function getApiBaseUrl(): string {

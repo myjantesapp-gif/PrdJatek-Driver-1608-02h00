@@ -1,3 +1,4 @@
+import { formatMAD } from '@/lib/money';
 import React from 'react';
 import {
   View,
@@ -107,7 +108,7 @@ export default function OrdersScreen() {
                   </View>
                 </View>
                 <View style={styles.completedRight}>
-                  <Text style={styles.completedEarnings}>+{order.earnings.toFixed(2)} €</Text>
+                  <Text style={styles.completedEarnings}>+{formatMAD(order.earnings)}</Text>
                   {order.rating !== undefined && (
                     <View style={styles.ratingRow}>
                       <Ionicons name="star" size={12} color={Colors.secondary} />

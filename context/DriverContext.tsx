@@ -25,6 +25,7 @@ import {
   getLastNotificationResponse,
 } from '@/lib/notifications';
 import { useAuth } from '@/context/AuthContext';
+import { readRemoteAmount } from '@/lib/money';
 import {
   ACTIVE_STATUS_ORDER,
   isReadyForPickupStatus,
@@ -98,6 +99,7 @@ export interface Order {
   };
   items: OrderItem[];
   earnings: number;
+  total?: number;
   distance: number;
   estimatedPickup: number;
   estimatedDelivery: number;
@@ -170,8 +172,10 @@ function mergeOrderWithServer(local: Order, server: Order): Order {
       lng: server.customer.lng || local.customer.lng,
     },
     items: server.items.length > 0 ? server.items : local.items,
+    earnings: Number.isFinite(server.earnings) ? server.earnings : local.earnings,
     createdAt: server.createdAt || local.createdAt,
     otp: server.otp || local.otp,
+    total: server.total ?? local.total,
   };
 }
 
@@ -182,9 +186,9 @@ function mapAvailableOrder(order: ApiAvailableOrder): Order {
   const items: OrderItem[] = rawItems.map((i) => ({
     name: i.menuItemName ?? i.name ?? '',
     quantity: i.quantity,
-    price: Number(i.unitPrice ?? i.price) || 0,
+    price: readRemoteAmount(i.unitPrice ?? i.price),
   }));
-  const deliveryFee = Number(order.deliveryFee) || 0;
+  const deliveryFee = readRemoteAmount(order.deliveryFee);
 
   return {
     id: String(order.id),
@@ -227,11 +231,11 @@ function mapApiOrder(apiOrder: ApiOrder, driverId: number): Order {
   const items: OrderItem[] = rawItems.map((i) => ({
     name: i.name ?? i.menuItemName ?? '',
     quantity: i.quantity,
-    price: Number(i.price ?? i.unitPrice) || 0,
+    price: readRemoteAmount(i.price ?? i.unitPrice),
   }));
 
-  const tip = Number(apiOrder.tip) || 0;
-  const deliveryFee = Number(apiOrder.deliveryFee) || 0;
+  const tip = apiOrder.tip == null ? 0 : readRemoteAmount(apiOrder.tip);
+  const deliveryFee = readRemoteAmount(apiOrder.deliveryFee);
   const earnings = deliveryFee + tip;
 
   const distance = Math.max(0, Number(apiOrder.distanceToPickupKm ?? apiOrder.distance) || 0);
@@ -259,6 +263,7 @@ function mapApiOrder(apiOrder: ApiOrder, driverId: number): Order {
     },
     items,
     earnings,
+    total: apiOrder.total == null ? undefined : Number(apiOrder.total),
     distance,
     estimatedPickup: apiOrder.estimatedPickupTime ?? 0,
     estimatedDelivery: apiOrder.estimatedDeliveryTime ?? 0,
@@ -317,7 +322,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
   const [terminalOrder, setTerminalOrder] = useState<Order | null>(null);
   const [history, setHistory] = useState<DeliveryHistory[]>([]);
-  const [earnings, setEarnings] = useState<DriverEarnings>({ today: 0, week: 0, month: 0 });
+  const [earnings, setEarnings] = useState<DriverEarnings>({ today: NaN, week: NaN, month: NaN });
   const [stats, setStats] = useState<DriverStats>({
     deliveriesToday: 0,
     deliveriesTotal: 0,
@@ -456,7 +461,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     }
     setIncomingOrder(null);
     setHistory([]);
-    setEarnings({ today: 0, week: 0, month: 0 });
+    setEarnings({ today: NaN, week: NaN, month: NaN });
     setStats({ deliveriesToday: 0, deliveriesTotal: 0, rating: 0 });
     setIsApiConnected(false);
     setLastSyncAt(null);
@@ -651,9 +656,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       try {
         const e: ApiEarnings = await api.getEarnings(driverId);
         setEarnings({
-          today: Number(e.today) || 0,
-          week: Number(e.thisWeek) || 0,
-          month: Number(e.thisMonth) || 0,
+          today: readRemoteAmount(e.today),
+          week: readRemoteAmount(e.thisWeek),
+          month: readRemoteAmount(e.thisMonth),
         });
         setStats((prev) => ({
           ...prev,
@@ -1981,9 +1986,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       // counts locally from the completed order.
       api.getEarnings(driverId).then((e) => {
         setEarnings({
-          today: Number(e.today) || 0,
-          week: Number(e.thisWeek) || 0,
-          month: Number(e.thisMonth) || 0,
+          today: readRemoteAmount(e.today),
+          week: readRemoteAmount(e.thisWeek),
+          month: readRemoteAmount(e.thisMonth),
         });
         setStats((prev) => ({
           ...prev,
@@ -2010,9 +2015,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     if (!driverId) return;
     api.getEarnings(driverId).then((e) => {
       setEarnings({
-        today: Number(e.today) || 0,
-        week: Number(e.thisWeek) || 0,
-        month: Number(e.thisMonth) || 0,
+        today: readRemoteAmount(e.today),
+        week: readRemoteAmount(e.thisWeek),
+        month: readRemoteAmount(e.thisMonth),
       });
     }).catch(() => {});
   }, [driverId]);

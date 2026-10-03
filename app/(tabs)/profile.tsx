@@ -1,3 +1,4 @@
+import { formatMAD } from '@/lib/money';
 import React from 'react';
 import {
   View,
@@ -113,7 +114,7 @@ export default function ProfileScreen() {
             </View>
             <View style={styles.ratingStat}>
               <Text style={[styles.ratingStatVal, { color: Colors.success }]}>
-                {earnings.month.toFixed(0)} €
+                {formatMAD(earnings.month)}
               </Text>
               <Text style={styles.ratingStatLabel}>Ce mois</Text>
             </View>

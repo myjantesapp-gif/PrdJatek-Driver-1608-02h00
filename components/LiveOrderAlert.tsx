@@ -1,3 +1,4 @@
+import { formatMAD } from '@/lib/money';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
@@ -111,7 +112,7 @@ export function LiveOrderAlert({ order, onAccept, onDecline }: LiveOrderAlertPro
           <Text style={styles.detail}>{totalItems} article{totalItems > 1 ? 's' : ''}</Text>
         </View>
         <View style={styles.earningsBig}>
-          <Text style={styles.earningsAmount}>{order.earnings.toFixed(2)} €</Text>
+          <Text style={styles.earningsAmount}>{formatMAD(order.earnings)}</Text>
         </View>
       </View>
 

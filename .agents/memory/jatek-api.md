@@ -1,9 +1,9 @@
 ---
 name: Jatek API endpoints
-description: Confirmed REST endpoints for ma.jatek.app — driver auth, profile, orders, earnings, location
+description: REST contract for api.jatek.app — driver auth, profile, orders, earnings, location
 ---
 
-Base URL: `https://ma.jatek.app`
+Base URL: `https://api.jatek.app`
 
 ## Auth
 - `POST /api/auth/login` — `{email, password}` → `{token, user}` (JWT, expires ~30 days)

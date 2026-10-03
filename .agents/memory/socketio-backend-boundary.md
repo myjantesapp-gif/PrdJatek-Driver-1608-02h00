@@ -8,7 +8,7 @@ description: The remote Jatek origin must provide the Socket.IO server; this dri
 The driver workspace is an Expo client and has no server runtime. The
 Socket.IO endpoint, JWT handshake validation, driver rooms, event emission,
 and production CORS must be implemented and deployed with the backend serving
-`ma.jatek.app`; changing the client cannot create that remote endpoint.
+`api.jatek.app`; changing the client cannot create that remote endpoint.
 
 **Why:** An ordinary HTTP API response and a working preflight do not prove
 that the Engine.IO polling route is deployed. The client can be correct and

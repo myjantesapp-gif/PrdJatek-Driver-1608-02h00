@@ -4,12 +4,12 @@
 - [Orders not arriving — root causes](orders-not-arriving.md) — 3 bugs: busy→online reset, SSE useEffect/pollOrdersRef, 401 infinite loop
 - [Expo web preview startup](expo-web-preview.md) — use offline production-preview mode when DevTools cannot load its Linux shell
 - [Android notification permissions](android-notification-permissions.md) — prompt only from the undetermined state; denied users must use system settings to re-enable alerts
-- [Remote business API boundary](remote-api-cors.md) — exclusively ma.jatek.app; no local backend, fake orders, alternate origin, or failover
+- [Remote business API boundary](remote-api-cors.md) — exclusively api.jatek.app; backend amounts in MAD; no local backend, fake orders or failover
 - [Realtime transport boundary](realtime-transport.md) — current driver contract uses Socket.IO; SSE is historical, with polling as fallback
 - [Android hardware validation](android-hardware-validation.md) — this Replit workspace has no Android SDK, adb, emulator, or connected device; real APK checks require external hardware
 - [Cold-start notification routing](notification-cold-start.md) — wait for server-validated snapshot hydration before routing a notification tap to an active order
 - [EAS OTA versus native APK](eas-ota-native.md) — OTA updates JavaScript only; Android permissions and native modules require a new APK build
-- [Socket.IO backend boundary](socketio-backend-boundary.md) — the driver repo owns the client; ma.jatek.app must expose and validate the remote Socket.IO handshake
+- [Socket.IO backend boundary](socketio-backend-boundary.md) — the driver repo owns the client; api.jatek.app must expose and validate the remote Socket.IO handshake
 - [GitHub binary uploads](github-binary-assets.md) — avoid shell stdout base64 for large files; read bytes directly and verify the Git blob hash
 - [GitHub connector rate limits](github-proxy-rate-limits.md) — throttle writes; use inline tree contents for text and verify tree hashes before updating the branch
 - [Native icon color profiles](native-icon-color-profiles.md) — PNG padding/resizing must preserve ICC profiles or convert correctly to sRGB

@@ -101,7 +101,7 @@ describe('native push notification setup', () => {
     expect(notifications.scheduleNotificationAsync).toHaveBeenCalledWith({
       content: expect.objectContaining({
         title: 'Nouvelle commande disponible',
-        body: 'Pizza Oujda · 4.50 €',
+        body: 'Pizza Oujda · 4.50 MAD',
         channelId: ORDERS_NOTIFICATION_CHANNEL_ID,
         data: { type: 'new_order', orderId: 103 },
       }),

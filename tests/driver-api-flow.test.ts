@@ -18,6 +18,23 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('documented driver API flow', () => {
+  it('reads MAD earnings only from the authenticated remote endpoint without conversion', async () => {
+    api.setToken('fixture-token');
+    const remote = {
+      today: 123.45, thisWeek: 789.12, thisMonth: 2345.67,
+      totalDeliveries: 17, completedToday: 3,
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse(remote));
+    await expect(api.getEarnings(7)).resolves.toEqual(remote);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.jatek.app/api/drivers/7/earnings',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer fixture-token' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('uses strict JWT status payloads and reconciles an empty confirmation response', async () => {
     api.setToken('fixture-token');
     const fetchMock = vi.spyOn(globalThis, 'fetch');
@@ -34,7 +51,7 @@ describe('documented driver API flow', () => {
       .toEqual(['driver_at_restaurant', 'picked_up', 'en_route', 'out_for_delivery'].map(status => ({ status })));
     expect(JSON.parse(String(fetchMock.mock.calls[4][1]?.body))).toEqual({ pickupCode: '7364' });
     for (const [url, options] of fetchMock.mock.calls) {
-      expect(String(url)).toMatch(/^https:\/\/ma\.jatek\.app\/api\/orders\//);
+      expect(String(url)).toMatch(/^https:\/\/api\.jatek\.app\/api\/orders\//);
       expect(options?.headers).toMatchObject({ Authorization: 'Bearer fixture-token' });
     }
   });
@@ -44,7 +61,7 @@ describe('documented driver API flow', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse(orders));
     await expect(api.getOrders({ driverId: '7' })).resolves.toEqual(orders);
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://ma.jatek.app/api/orders?driverId=7',
+      'https://api.jatek.app/api/orders?driverId=7',
       expect.any(Object),
     );
   });
@@ -66,7 +83,7 @@ describe('documented driver API flow', () => {
 
     await expect(api.getAvailableOrders()).resolves.toEqual(orders);
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://ma.jatek.app/api/orders/available',
+      'https://api.jatek.app/api/orders/available',
       expect.objectContaining({
         headers: { 'Content-Type': 'application/json' },
       }),
@@ -118,12 +135,12 @@ describe('documented driver API flow', () => {
     await expect(api.confirmDelivery(103, '7364')).resolves.toMatchObject(deliveredOrder);
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      'https://ma.jatek.app/api/orders/103/accept-delivery',
-      'https://ma.jatek.app/api/orders/103/status',
-      'https://ma.jatek.app/api/orders/103/status',
-      'https://ma.jatek.app/api/orders/103/status',
-      'https://ma.jatek.app/api/orders/103/status',
-      'https://ma.jatek.app/api/orders/103/confirm-delivery',
+      'https://api.jatek.app/api/orders/103/accept-delivery',
+      'https://api.jatek.app/api/orders/103/status',
+      'https://api.jatek.app/api/orders/103/status',
+      'https://api.jatek.app/api/orders/103/status',
+      'https://api.jatek.app/api/orders/103/status',
+      'https://api.jatek.app/api/orders/103/confirm-delivery',
     ]);
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ driverId: 7 });
     for (let i = 0; i < milestones.length; i++) {
@@ -152,8 +169,8 @@ describe('documented driver API flow', () => {
 
     await expect(api.acceptDelivery(103, 7)).resolves.toMatchObject(acceptedOrder);
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      'https://ma.jatek.app/api/orders/103/accept-delivery',
-      'https://ma.jatek.app/api/orders/103',
+      'https://api.jatek.app/api/orders/103/accept-delivery',
+      'https://api.jatek.app/api/orders/103',
     ]);
   });
 
@@ -164,7 +181,7 @@ describe('documented driver API flow', () => {
 
     await expect(api.getCurrentDriver()).resolves.toMatchObject(driver);
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://ma.jatek.app/api/drivers/me',
+      'https://api.jatek.app/api/drivers/me',
       expect.objectContaining({ headers: { 'Content-Type': 'application/json' } }),
     );
   });
@@ -177,7 +194,7 @@ describe('documented driver API flow', () => {
     await api.updateLocation(7, Number('48.8566'), Number('2.3522'));
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://ma.jatek.app/api/drivers/7/location',
+      'https://api.jatek.app/api/drivers/7/location',
       expect.objectContaining({
         method: 'PATCH',
         headers: {
@@ -207,7 +224,7 @@ describe('documented driver API flow', () => {
     await api.heartbeat(7);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://ma.jatek.app/api/drivers/7/heartbeat',
+      'https://api.jatek.app/api/drivers/7/heartbeat',
       expect.objectContaining({
         method: 'POST',
         headers: {
@@ -229,7 +246,7 @@ describe('documented driver API flow', () => {
     });
   });
 
-  it('uses only ma.jatek.app and explains the browser CORS requirement when it is unreachable', async () => {
+  it('uses only api.jatek.app and explains the browser CORS requirement when it is unreachable', async () => {
     vi.spyOn(globalThis, 'fetch')
       .mockRejectedValueOnce(new TypeError('Failed to fetch'));
 
@@ -239,7 +256,7 @@ describe('documented driver API flow', () => {
     });
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      'https://ma.jatek.app/api/auth/login',
+      'https://api.jatek.app/api/auth/login',
       expect.any(Object),
     );
   });
@@ -252,7 +269,7 @@ describe('documented driver API flow', () => {
     await expect(api.registerPushToken(' ExponentPushToken[test] ')).resolves.toEqual({ ok: true });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://ma.jatek.app/api/drivers/me/push-token',
+      'https://api.jatek.app/api/drivers/me/push-token',
       expect.objectContaining({
         method: 'PATCH',
         headers: {
@@ -300,8 +317,8 @@ describe('documented driver API flow', () => {
     });
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      'https://ma.jatek.app/api/auth/send-otp',
-      'https://ma.jatek.app/api/auth/verify-otp',
+      'https://api.jatek.app/api/auth/send-otp',
+      'https://api.jatek.app/api/auth/verify-otp',
     ]);
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       phone: '+212600000000',
@@ -335,8 +352,8 @@ describe('documented driver API flow', () => {
       .resolves.toMatchObject({ success: true });
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      'https://ma.jatek.app/api/auth/forgot-password',
-      'https://ma.jatek.app/api/auth/reset-password',
+      'https://api.jatek.app/api/auth/forgot-password',
+      'https://api.jatek.app/api/auth/reset-password',
     ]);
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       email: 'driver@example.com',
@@ -367,9 +384,9 @@ describe('documented driver API flow', () => {
     });
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      'https://ma.jatek.app/api/orders/103/status',
-      'https://ma.jatek.app/api/orders/103',
-      'https://ma.jatek.app/api/orders/103/status',
+      'https://api.jatek.app/api/orders/103/status',
+      'https://api.jatek.app/api/orders/103',
+      'https://api.jatek.app/api/orders/103/status',
     ]);
   });
 
@@ -401,8 +418,8 @@ describe('documented driver API flow', () => {
       .mockResolvedValueOnce(jsonResponse({ data: { order: delivered } }));
     await expect(api.confirmDelivery(103, '7364')).resolves.toEqual(delivered);
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      'https://ma.jatek.app/api/orders/103/confirm-delivery',
-      'https://ma.jatek.app/api/orders/103',
+      'https://api.jatek.app/api/orders/103/confirm-delivery',
+      'https://api.jatek.app/api/orders/103',
     ]);
   });
 });

@@ -1,3 +1,4 @@
+import { formatMAD } from '@/lib/money';
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,7 +17,7 @@ export function EarningsCard({ earnings, stats }: EarningsCardProps) {
         <Text style={styles.label}>Revenus aujourd'hui</Text>
       </View>
 
-      <Text style={styles.amount}>{earnings.today.toFixed(2)} €</Text>
+      <Text style={styles.amount}>{formatMAD(earnings.today)}</Text>
 
       <View style={styles.statsRow}>
         <View style={styles.statCol}>
@@ -40,11 +41,11 @@ export function EarningsCard({ earnings, stats }: EarningsCardProps) {
       <View style={styles.weekRow}>
         <View style={styles.weekItem}>
           <Text style={styles.weekLabel}>Cette semaine</Text>
-          <Text style={styles.weekAmount}>{earnings.week.toFixed(2)} €</Text>
+          <Text style={styles.weekAmount}>{formatMAD(earnings.week)}</Text>
         </View>
         <View style={styles.weekItem}>
           <Text style={styles.weekLabel}>Ce mois</Text>
-          <Text style={styles.weekAmount}>{earnings.month.toFixed(2)} €</Text>
+          <Text style={styles.weekAmount}>{formatMAD(earnings.month)}</Text>
         </View>
       </View>
     </View>

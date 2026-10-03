@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { io, type Socket } from 'socket.io-client';
 
-const PRODUCTION_ORIGIN = 'https://ma.jatek.app';
+const PRODUCTION_ORIGIN = 'https://api.jatek.app';
 const SOCKET_PATH = '/socket.io/';
 const WEB_CLIENT_ORIGIN = 'https://driver.jatek.app';
 const TIMEOUT_MS = 15_000;

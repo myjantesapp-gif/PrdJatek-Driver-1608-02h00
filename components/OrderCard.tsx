@@ -1,3 +1,4 @@
+import { formatMAD } from '@/lib/money';
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -25,7 +26,7 @@ export function OrderCard({ order, onPress, compact = false }: OrderCardProps) {
           <Text style={styles.restaurantAddress} numberOfLines={1}>{order.restaurant.address}</Text>
         </View>
         <View style={styles.earningsBadge}>
-          <Text style={styles.earningsText}>{order.earnings.toFixed(2)}€</Text>
+          <Text style={styles.earningsText}>{formatMAD(order.earnings)}</Text>
         </View>
       </View>
 
