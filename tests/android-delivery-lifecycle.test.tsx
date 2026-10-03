@@ -20,6 +20,7 @@ const storage = vi.hoisted(() => {
 const appState = vi.hoisted(() => {
   const listeners = new Set<(state: string) => void>();
   return {
+    currentState: 'active',
     listeners,
     addEventListener: vi.fn((_event: string, listener: (state: string) => void) => {
       listeners.add(listener);
@@ -60,7 +61,10 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 
 vi.mock('react-native', () => ({
   Alert: { alert: vi.fn() },
-  AppState: { addEventListener: appState.addEventListener },
+  AppState: {
+    addEventListener: appState.addEventListener,
+    get currentState() { return appState.currentState; },
+  },
   Platform: { OS: 'android' },
 }));
 
@@ -171,6 +175,7 @@ describe('Android delivery lifecycle smoke flow', () => {
     storage.setItem.mockClear();
     storage.removeItem.mockClear();
     appState.listeners.clear();
+    appState.currentState = 'active';
     router.push.mockReset();
     notificationBridge.getLastNotificationResponse.mockResolvedValue(null);
     latest = null;
@@ -246,6 +251,116 @@ describe('Android delivery lifecycle smoke flow', () => {
       await expect(latest?.updateOrderStatus(String(ORDER_ID), status)).resolves.toBe(true);
     });
   }
+
+  it('synchronizes earnings, counts and rating together when the app resumes', async () => {
+    const renderer = await mountActive();
+    const earnings = { today: 125.5, thisWeek: 655, thisMonth: 2110.75, completedToday: 4, totalDeliveries: 82 };
+    vi.mocked(api.getEarnings).mockResolvedValue(earnings);
+    const profile = await api.getCurrentDriver();
+    vi.mocked(api.getCurrentDriver).mockResolvedValue({ ...profile, rating: 4.75 });
+    await act(async () => { appState.listeners.forEach(listener => listener('active')); });
+    await settle();
+    expect(latest?.earnings).toEqual({ today: 125.5, week: 655, month: 2110.75 });
+    expect(latest?.stats).toEqual({ deliveriesToday: 4, deliveriesTotal: 82, rating: 4.75 });
+    expect(latest?.metricsLastSyncAt).toBeInstanceOf(Date);
+    expect(latest?.metricsSyncError).toBeNull();
+    act(() => renderer.unmount());
+  });
+
+  it('refreshes remote figures at the 30-second interval', async () => {
+    const timer = vi.spyOn(globalThis, 'setInterval');
+    const renderer = await mountActive();
+    vi.mocked(api.getEarnings).mockResolvedValue({
+      today: 90, thisWeek: 300, thisMonth: 750, completedToday: 2, totalDeliveries: 9,
+    });
+    const metricsTimer = timer.mock.calls.find(([, delay]) => delay === 30000);
+    expect(metricsTimer).toBeDefined();
+    appState.currentState = 'background';
+    const callsBeforeBackground = vi.mocked(api.getEarnings).mock.calls.length;
+    await act(async () => { (metricsTimer![0] as () => void)(); });
+    expect(api.getEarnings).toHaveBeenCalledTimes(callsBeforeBackground);
+    appState.currentState = 'active';
+    await act(async () => { (metricsTimer![0] as () => void)(); });
+    await settle();
+    expect(latest?.earnings.today).toBe(90);
+    expect(latest?.stats.deliveriesTotal).toBe(9);
+    act(() => renderer.unmount());
+  });
+
+  it('keeps last confirmed figures and reports a synchronization failure until retry succeeds', async () => {
+    const renderer = await mountActive();
+    const previous = latest?.earnings;
+    vi.mocked(api.getEarnings).mockRejectedValueOnce(new Error('API indisponible'));
+    await act(async () => { await latest!.refreshEarnings(); });
+    expect(latest?.earnings).toEqual(previous);
+    expect(latest?.metricsSyncError).toBe('API indisponible');
+    expect(latest?.metricsRefreshing).toBe(false);
+    vi.mocked(api.getEarnings).mockResolvedValue({
+      today: 33, thisWeek: 66, thisMonth: 99, completedToday: 1, totalDeliveries: 3,
+    });
+    await act(async () => { await latest!.refreshEarnings(); });
+    expect(latest?.earnings.today).toBe(33);
+    expect(latest?.metricsSyncError).toBeNull();
+    act(() => renderer.unmount());
+  });
+
+  it('coalesces simultaneous synchronization requests', async () => {
+    const renderer = await mountActive();
+    let resolve!: (value: Awaited<ReturnType<typeof api.getEarnings>>) => void;
+    const pending = new Promise<Awaited<ReturnType<typeof api.getEarnings>>>(done => { resolve = done; });
+    vi.mocked(api.getEarnings).mockClear().mockReturnValueOnce(pending);
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => { first = latest!.refreshEarnings(); second = latest!.refreshEarnings(); });
+    expect(first).toBe(second);
+    expect(api.getEarnings).toHaveBeenCalledTimes(1);
+    expect(latest?.metricsRefreshing).toBe(true);
+    await act(async () => {
+      resolve({ today: 1, thisWeek: 2, thisMonth: 3, completedToday: 1, totalDeliveries: 1 });
+      await first;
+    });
+    expect(latest?.metricsRefreshing).toBe(false);
+    act(() => renderer.unmount());
+  });
+
+  it('rejects incomplete figures rather than replacing them with zeros', async () => {
+    const renderer = await mountActive();
+    const previous = latest?.earnings;
+    vi.mocked(api.getEarnings).mockResolvedValueOnce({} as never);
+    await act(async () => { await latest!.refreshEarnings(); });
+    expect(latest?.earnings).toEqual(previous);
+    expect(latest?.metricsSyncError).toContain('invalides');
+    act(() => renderer.unmount());
+  });
+
+  it('ignores a previous account’s earnings response after the driver changes', async () => {
+    const renderer = await mountActive();
+    const profile = await api.getCurrentDriver();
+    let resolve!: (value: Awaited<ReturnType<typeof api.getEarnings>>) => void;
+    vi.mocked(api.getEarnings).mockReturnValueOnce(
+      new Promise<Awaited<ReturnType<typeof api.getEarnings>>>(done => { resolve = done; }),
+    );
+    let oldRequest!: Promise<void>;
+    act(() => { oldRequest = latest!.refreshEarnings(); });
+    try {
+      auth.user.driverId = 8;
+      vi.mocked(api.getCurrentDriver).mockResolvedValue({ ...profile, id: 8 });
+      vi.mocked(api.getEarnings).mockResolvedValue({
+        today: 8, thisWeek: 16, thisMonth: 24, completedToday: 2, totalDeliveries: 4,
+      });
+      await act(async () => { renderer.update(<DriverProvider><Probe /></DriverProvider>); });
+      await settle();
+      await act(async () => {
+        resolve({ today: 999, thisWeek: 999, thisMonth: 999, completedToday: 99, totalDeliveries: 99 });
+        await oldRequest;
+      });
+      expect(latest?.earnings).toEqual({ today: 8, week: 16, month: 24 });
+      expect(latest?.stats.deliveriesTotal).toBe(4);
+    } finally {
+      act(() => renderer.unmount());
+      auth.user.driverId = DRIVER_ID;
+    }
+  });
 
   it('completes the strict flow through real API methods against a local contract double', async () => {
     const renderer = await mountActive();

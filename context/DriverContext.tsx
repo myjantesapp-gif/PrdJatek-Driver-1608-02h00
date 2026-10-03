@@ -294,7 +294,10 @@ interface DriverContextType {
   isSocketConnected: boolean;
   lastSyncAt: Date | null;
   pushNotificationStatus: PushNotificationStatus;
-  refreshEarnings: () => void;
+  refreshEarnings: () => Promise<void>;
+  metricsRefreshing: boolean;
+  metricsSyncError: string | null;
+  metricsLastSyncAt: Date | null;
   refreshProfile: () => Promise<void>;
 }
 
@@ -307,6 +310,7 @@ const DriverContext = createContext<DriverContextType | null>(null);
 const FALLBACK_POLL_MS = 3_000;
 const DRIVER_LOCATION_POLL_MS = 10_000;
 const DRIVER_HEARTBEAT_INTERVAL_MS = 30_000;
+const METRICS_SYNC_INTERVAL_MS = 30_000;
 
 type DriverCoordinates = {
   latitude: number;
@@ -323,10 +327,14 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const [terminalOrder, setTerminalOrder] = useState<Order | null>(null);
   const [history, setHistory] = useState<DeliveryHistory[]>([]);
   const [earnings, setEarnings] = useState<DriverEarnings>({ today: NaN, week: NaN, month: NaN });
+  const [metricsRefreshing, setMetricsRefreshing] = useState(false);
+  const [metricsSyncError, setMetricsSyncError] = useState<string | null>(null);
+  const [metricsLastSyncAt, setMetricsLastSyncAt] = useState<Date | null>(null);
+  const metricsRequestRef = useRef<{ epoch: number; promise: Promise<void> } | null>(null);
   const [stats, setStats] = useState<DriverStats>({
-    deliveriesToday: 0,
-    deliveriesTotal: 0,
-    rating: 0,
+    deliveriesToday: NaN,
+    deliveriesTotal: NaN,
+    rating: NaN,
   });
   const [profile, setProfile] = useState<DriverProfile>({
     id: user ? String(user.driverId) : 'DRV',
@@ -343,6 +351,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const activeOrderHydratedRef = useRef(false);
   const driverSessionEpochRef = useRef(0);
   const profileAvailabilityRef = useRef<boolean | null>(null);
+  const profileRequestVersionRef = useRef(0);
   const profileIncompleteRef = useRef(false);
   /** A successful profile/assigned-order request must not hide failed offers. */
   const offerRequestFailureRef = useRef<string | null>(null);
@@ -462,7 +471,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     setIncomingOrder(null);
     setHistory([]);
     setEarnings({ today: NaN, week: NaN, month: NaN });
-    setStats({ deliveriesToday: 0, deliveriesTotal: 0, rating: 0 });
+    setStats({ deliveriesToday: NaN, deliveriesTotal: NaN, rating: NaN });
+    metricsRequestRef.current = null;
+    setMetricsRefreshing(false);
+    setMetricsSyncError(null);
+    setMetricsLastSyncAt(null);
     setIsApiConnected(false);
     setLastSyncAt(null);
 
@@ -565,10 +578,14 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
   const refreshProfile = useCallback(async () => {
     if (!driverId) return;
+    const epoch = driverSessionEpochRef.current;
+    const version = ++profileRequestVersionRef.current;
     try {
       // /me is authoritative for the authenticated session. It also avoids
       // keeping a stale driverId from a previous login in sync.
       const d: ApiDriverProfile = await api.getCurrentDriver();
+      if (epoch !== driverSessionEpochRef.current || version !== profileRequestVersionRef.current) return;
+      if (Number(d.id) !== driverId) throw new Error('Le profil reçu ne correspond pas au livreur connecté.');
       setProfile({
         id: String(d.id),
         name: d.name,
@@ -579,7 +596,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       });
       setStats((prev) => ({
         ...prev,
-        rating: Number(d.rating) || 0,
+        rating: readRemoteAmount(d.rating),
       }));
       // A completed profile is required by the remote offers endpoint. An
       // explicitly null timestamp must not appear as "online, no orders".
@@ -607,10 +624,61 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       }
       setIsApiConnected(offerRequestFailureRef.current === null);
     } catch (err) {
+      if (epoch !== driverSessionEpochRef.current || version !== profileRequestVersionRef.current) return;
       console.warn('[DriverContext] loadProfile failed:', err);
       setIsApiConnected(false);
+      throw err;
     }
   }, [driverId]);
+
+  const refreshEarnings = useCallback((): Promise<void> => {
+    if (!driverId) return Promise.resolve();
+    const epoch = driverSessionEpochRef.current;
+    if (metricsRequestRef.current?.epoch === epoch) return metricsRequestRef.current.promise;
+    setMetricsRefreshing(true);
+    const promise = (async () => {
+      try {
+        const [remote] = await Promise.all([api.getEarnings(driverId), refreshProfile()]);
+        if (epoch !== driverSessionEpochRef.current) return;
+        const next = {
+          today: readRemoteAmount(remote.today),
+          week: readRemoteAmount(remote.thisWeek),
+          month: readRemoteAmount(remote.thisMonth),
+        };
+        const completedToday = readRemoteAmount(remote.completedToday);
+        const totalDeliveries = readRemoteAmount(remote.totalDeliveries);
+        if (
+          !Object.values(next).every(Number.isFinite) ||
+          !Number.isSafeInteger(completedToday) || completedToday < 0 ||
+          !Number.isSafeInteger(totalDeliveries) || totalDeliveries < 0
+        ) throw new Error('Chiffres incomplets ou invalides reçus de l’API distante.');
+        setEarnings(next);
+        setStats(previous => ({ ...previous, deliveriesToday: completedToday, deliveriesTotal: totalDeliveries }));
+        setMetricsLastSyncAt(new Date());
+        setMetricsSyncError(null);
+      } catch (error) {
+        if (epoch !== driverSessionEpochRef.current) return;
+        setMetricsSyncError(error instanceof Error ? error.message : 'Synchronisation des chiffres impossible.');
+        console.warn('[DriverContext] metrics synchronization failed:', error);
+      } finally {
+        if (epoch === driverSessionEpochRef.current) {
+          setMetricsRefreshing(false);
+          metricsRequestRef.current = null;
+        }
+      }
+    })();
+    metricsRequestRef.current = { epoch, promise };
+    return promise;
+  }, [driverId, refreshProfile]);
+
+  useEffect(() => {
+    if (!driverId) return;
+    void refreshEarnings();
+    const interval = setInterval(() => {
+      if (!AppState.currentState || AppState.currentState === 'active') void refreshEarnings();
+    }, METRICS_SYNC_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [driverId, refreshEarnings]);
 
   useEffect(() => {
     if (!driverId) return;
@@ -652,27 +720,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
     void setupPushNotifications();
 
-    const loadEarnings = async () => {
-      try {
-        const e: ApiEarnings = await api.getEarnings(driverId);
-        setEarnings({
-          today: readRemoteAmount(e.today),
-          week: readRemoteAmount(e.thisWeek),
-          month: readRemoteAmount(e.thisMonth),
-        });
-        setStats((prev) => ({
-          ...prev,
-          deliveriesToday: e.completedToday,
-          deliveriesTotal: e.totalDeliveries,
-        }));
-      } catch (err) {
-        console.warn('[DriverContext] loadEarnings failed:', err);
-      }
-    };
-
-    refreshProfile();
-    loadEarnings();
-  }, [driverId, refreshProfile]);
+  }, [driverId]);
 
   // ── Wire notification tap → navigate to active order ────────────────────────
 
@@ -1479,7 +1527,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     }
 
     pollOrdersRef.current();
-  }, [driverId]);
+    void refreshEarnings();
+  }, [driverId, refreshEarnings]);
 
   const handleSocketAuthError = useCallback(() => {
     console.warn('[DriverContext] Socket.IO auth error — token rejected by server, logging out');
@@ -1505,8 +1554,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
   // A successful reconnect gets one immediate authoritative synchronization.
   useEffect(() => {
-    if (driverId && isSocketConnected) void pollOrdersRef.current();
-  }, [driverId, isSocketConnected]);
+    if (driverId && isSocketConnected) {
+      void pollOrdersRef.current();
+      void refreshEarnings();
+    }
+  }, [driverId, isSocketConnected, refreshEarnings]);
 
   useEffect(() => {
     if (!driverId) return;
@@ -1514,7 +1566,10 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     // Android may pause timers while the app is backgrounded. Reconcile
     // immediately when it becomes active again instead of waiting for polling.
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') pollOrdersRef.current();
+      if (nextState === 'active') {
+        void pollOrdersRef.current();
+        void refreshEarnings();
+      }
     });
 
     pollOrdersRef.current();
@@ -1527,7 +1582,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       }
       appStateSubscription.remove();
     };
-  }, [driverId]);
+  }, [driverId, refreshEarnings]);
 
   // ── Order actions ────────────────────────────────────────────────────────────
 
@@ -1763,8 +1818,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         console.warn('[DriverContext] failed to persist availability after terminal order:', error);
       });
     }
+    void refreshEarnings();
     return mapped.status === 'completed';
-  }, [driverId, queueActiveSnapshotWrite]);
+  }, [driverId, queueActiveSnapshotWrite, refreshEarnings]);
 
   /**
    * Advance the active order's status. Returns a Promise so callers can await
@@ -1984,18 +2040,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
       // Totals remain server-authoritative; never synthesize gains or delivery
       // counts locally from the completed order.
-      api.getEarnings(driverId).then((e) => {
-        setEarnings({
-          today: readRemoteAmount(e.today),
-          week: readRemoteAmount(e.thisWeek),
-          month: readRemoteAmount(e.thisMonth),
-        });
-        setStats((prev) => ({
-          ...prev,
-          deliveriesToday: e.completedToday,
-          deliveriesTotal: e.totalDeliveries,
-        }));
-      }).catch(() => {});
+      void refreshEarnings();
 
       return true;
     } catch (err) {
@@ -2009,18 +2054,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     } finally {
       isConfirmingDeliveryRef.current = false;
     }
-  }, [driverId, applyTerminalOrder, persistActiveOrderSnapshot]);
-
-  const refreshEarnings = useCallback(() => {
-    if (!driverId) return;
-    api.getEarnings(driverId).then((e) => {
-      setEarnings({
-        today: readRemoteAmount(e.today),
-        week: readRemoteAmount(e.thisWeek),
-        month: readRemoteAmount(e.thisMonth),
-      });
-    }).catch(() => {});
-  }, [driverId]);
+  }, [driverId, applyTerminalOrder, persistActiveOrderSnapshot, refreshEarnings]);
 
   return (
     <DriverContext.Provider value={{
@@ -2043,6 +2077,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       lastSyncAt,
        pushNotificationStatus,
       refreshEarnings,
+      metricsRefreshing,
+      metricsSyncError,
+      metricsLastSyncAt,
       refreshProfile,
     }}>
       {children}

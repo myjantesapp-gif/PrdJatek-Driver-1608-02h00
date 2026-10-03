@@ -14,6 +14,7 @@ import { Colors } from '@/constants/colors';
 import { useDriver } from '@/context/DriverContext';
 import { useAuth } from '@/context/AuthContext';
 import { EarningsCard } from '@/components/EarningsCard';
+import { MetricsSyncStatus } from '@/components/MetricsSyncStatus';
 import { StatusToggle } from '@/components/StatusToggle';
 import { OrderCard } from '@/components/OrderCard';
 
@@ -54,6 +55,7 @@ export default function HomeScreen() {
         <View style={styles.sectionGap} />
 
         <EarningsCard earnings={earnings} stats={stats} />
+        <MetricsSyncStatus />
 
         <View style={styles.sectionGap} />
 

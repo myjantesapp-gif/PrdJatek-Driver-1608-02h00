@@ -43,3 +43,9 @@ Keep `expo.owner`, `extra.eas.projectId`, `updates.url`, and the EAS profile's o
 **Why:** GitHub-connected builds enforce that the config project ID matches their linked Expo project; a mismatch fails before native compilation. OTA update URLs are also project-specific.
 
 **How to apply:** Before updating these identifiers, confirm which Expo project is canonical. Update all config references together; do not change the target project based on a build error alone.
+
+**Rule:** Do not assume a new GitHub-connected preview build has a higher Android versionCode merely because `autoIncrement` is enabled with a local version source.
+
+**Why:** Separate successful-source preview builds reported the same Android build number. A counter increment in the remote checkout does not guarantee persistence back to the repository.
+
+**How to apply:** Identify APKs by their EAS build ID and source revision, and verify their reported build numbers. If a release requires monotonically increasing numbers, persist the source counter deliberately rather than relying on a temporary remote checkout.

@@ -1,4 +1,5 @@
 import { formatMAD } from '@/lib/money';
+import { formatRemoteNumber } from '@/lib/driver-metrics';
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,18 +22,18 @@ export function EarningsCard({ earnings, stats }: EarningsCardProps) {
 
       <View style={styles.statsRow}>
         <View style={styles.statCol}>
-          <Text style={styles.statValue}>{stats.deliveriesToday}</Text>
+          <Text style={styles.statValue}>{formatRemoteNumber(stats.deliveriesToday)}</Text>
           <Text style={styles.statLabel}>Livraisons</Text>
         </View>
         <View style={styles.divider} />
         <View style={styles.statCol}>
-          <Text style={styles.statValue}>{stats.deliveriesTotal}</Text>
+          <Text style={styles.statValue}>{formatRemoteNumber(stats.deliveriesTotal)}</Text>
           <Text style={styles.statLabel}>Total</Text>
         </View>
         <View style={styles.divider} />
         <View style={styles.statCol}>
           <Text style={[styles.statValue, styles.ratingValue]}>
-            {stats.rating.toFixed(2)}
+            {formatRemoteNumber(stats.rating, 2)}
           </Text>
           <Text style={styles.statLabel}>Note</Text>
         </View>

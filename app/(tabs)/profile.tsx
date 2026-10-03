@@ -1,4 +1,6 @@
 import { formatMAD } from '@/lib/money';
+import { formatRemoteNumber } from '@/lib/driver-metrics';
+import { MetricsSyncStatus } from '@/components/MetricsSyncStatus';
 import React from 'react';
 import {
   View,
@@ -74,6 +76,7 @@ export default function ProfileScreen() {
   return (
     <View style={[styles.container, { paddingTop: topPad, paddingBottom: botPad }]}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+        <MetricsSyncStatus />
         <View style={styles.header}>
           <Text style={styles.title}>Profil</Text>
           <TouchableOpacity style={styles.supportBtn} onPress={() => router.push('/support')}>
@@ -93,7 +96,7 @@ export default function ProfileScreen() {
 
         <View style={styles.ratingCard}>
           <View style={styles.ratingMain}>
-            <Text style={styles.ratingBig}>{stats.rating.toFixed(2)}</Text>
+            <Text style={styles.ratingBig}>{formatRemoteNumber(stats.rating, 2)}</Text>
             <View style={styles.stars}>
               {[1, 2, 3, 4, 5].map((s) => (
                 <Ionicons
@@ -109,7 +112,7 @@ export default function ProfileScreen() {
           <View style={styles.ratingDivider} />
           <View style={styles.ratingStats}>
             <View style={styles.ratingStat}>
-              <Text style={styles.ratingStatVal}>{stats.deliveriesTotal}</Text>
+              <Text style={styles.ratingStatVal}>{formatRemoteNumber(stats.deliveriesTotal)}</Text>
               <Text style={styles.ratingStatLabel}>Livraisons</Text>
             </View>
             <View style={styles.ratingStat}>

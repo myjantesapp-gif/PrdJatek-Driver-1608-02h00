@@ -1,4 +1,6 @@
 import { formatMAD } from '@/lib/money';
+import { formatRemoteNumber } from '@/lib/driver-metrics';
+import { MetricsSyncStatus } from '@/components/MetricsSyncStatus';
 import React from 'react';
 import {
   View,
@@ -56,7 +58,6 @@ export default function HistoryScreen() {
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : 0;
 
-  const totalEarned = history.reduce((sum, h) => sum + h.earnings, 0);
 
   return (
     <View style={[styles.container, { paddingTop: topPad, paddingBottom: botPad }]}>
@@ -66,7 +67,7 @@ export default function HistoryScreen() {
 
       <View style={styles.summaryRow}>
         <View style={styles.summaryCard}>
-          <Text style={styles.summaryValue}>{stats.deliveriesTotal}</Text>
+          <Text style={styles.summaryValue}>{formatRemoteNumber(stats.deliveriesTotal)}</Text>
           <Text style={styles.summaryLabel}>Total livraisons</Text>
         </View>
         <View style={styles.summaryCard}>
@@ -77,7 +78,7 @@ export default function HistoryScreen() {
         </View>
         <View style={styles.summaryCard}>
           <Text style={[styles.summaryValue, { color: Colors.secondary }]}>
-            {stats.rating.toFixed(2)}
+            {formatRemoteNumber(stats.rating, 2)}
           </Text>
           <Text style={styles.summaryLabel}>Note moy.</Text>
         </View>
@@ -97,9 +98,10 @@ export default function HistoryScreen() {
           </View>
         }
         ListHeaderComponent={
-          history.length > 0 ? (
-            <Text style={styles.sectionTitle}>Livraisons récentes</Text>
-          ) : null
+          <View>
+            <MetricsSyncStatus />
+            {history.length > 0 && <Text style={styles.sectionTitle}>Livraisons récentes</Text>}
+          </View>
         }
       />
     </View>
