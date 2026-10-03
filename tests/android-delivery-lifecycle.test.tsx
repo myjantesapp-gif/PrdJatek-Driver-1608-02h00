@@ -247,6 +247,26 @@ describe('Android delivery lifecycle smoke flow', () => {
     },
   );
 
+  it('explains an explicitly incomplete remote profile instead of appearing online with no offers', async () => {
+    const profile = await api.getCurrentDriver();
+    vi.mocked(api.getCurrentDriver).mockResolvedValue({
+      ...profile,
+      isAvailable: true,
+      profileCompletedAt: null,
+    });
+    let renderer!: ReturnType<typeof TestRenderer.create>;
+    await act(async () => {
+      renderer = TestRenderer.create(<DriverProvider><Probe /></DriverProvider>);
+    });
+    await settle();
+    expect(latest?.status).toBe('offline');
+    expect(getAvailableOrders).not.toHaveBeenCalled();
+    expect(latest?.incomingOrder).toBeNull();
+    await act(async () => latest?.setStatus('online'));
+    expect(latest?.status).toBe('offline');
+    act(() => renderer.unmount());
+  });
+
   it('accepts a delivery, reconciles after Android backgrounding, and keeps the next action', async () => {
     let renderer!: ReturnType<typeof TestRenderer.create>;
     await act(async () => {

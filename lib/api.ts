@@ -58,6 +58,7 @@ export interface ApiDriverProfile {
   licenseNumber: string;
   photoUrl: string | null;
   isAvailable: boolean;
+  profileCompletedAt?: string | null;
   totalDeliveries: number;
   rating: number | null;
   latitude: number | null;

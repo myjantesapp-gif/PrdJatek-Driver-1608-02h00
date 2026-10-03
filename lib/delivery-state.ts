@@ -19,13 +19,15 @@ export function mapApiStatus(apiStatus: string): DeliveryStatus | null {
   const status = apiStatus?.trim().toLowerCase().replace(/[\s-]+/g, '_') ?? '';
   switch (status) {
     case 'pending':
-    case 'assigned':
     case 'ready':
     case 'ready_for_pickup':
       return 'incoming';
     case 'accepted':
+    case 'assigned':
+    case 'confirmed':
       return 'accepted';
     case 'at_restaurant':
+    case 'driver_at_restaurant':
     case 'ready_for_pickup':
     case 'preparing':
       return 'at_restaurant';

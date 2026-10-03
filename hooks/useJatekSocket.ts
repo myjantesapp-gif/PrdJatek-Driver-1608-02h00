@@ -8,7 +8,7 @@ import {
 } from 'socket.io-client';
 import { api, getApiBaseUrl, loadAuth } from '@/lib/api';
 
-export type JatekSocketEventName = 'order_ready' | 'order_assigned';
+export type JatekSocketEventName = 'order_available' | 'order_ready' | 'order_assigned';
 
 export type JatekSocketEvent = {
   name: JatekSocketEventName;
@@ -236,7 +236,7 @@ export function useJatekSocket({
 
       nextSocket.onAny((name, data) => {
         if (disposed) return;
-        if (name !== 'order_ready' && name !== 'order_assigned') return;
+        if (name !== 'order_available' && name !== 'order_ready' && name !== 'order_assigned') return;
         const eventName = name as JatekSocketEventName;
         onEventRef.current?.({
           name: eventName,

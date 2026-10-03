@@ -120,6 +120,10 @@ describe('useJatekSocket', () => {
         orderId: 104,
         driverId: 7,
       });
+      socketHarness.listeners.get('any')?.('order_available', {
+        orderId: 105,
+        status: 'preparing',
+      });
     });
 
     expect(renderer.toJSON()).toBe('connected');
@@ -132,6 +136,11 @@ describe('useJatekSocket', () => {
       name: 'order_assigned',
       type: 'order_assigned',
       data: { orderId: 104, driverId: 7 },
+    });
+    expect(onEvent).toHaveBeenNthCalledWith(3, {
+      name: 'order_available',
+      type: 'order_available',
+      data: { orderId: 105, status: 'preparing' },
     });
 
     act(() => renderer.unmount());

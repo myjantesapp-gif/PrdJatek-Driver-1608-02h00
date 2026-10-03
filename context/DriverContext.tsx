@@ -351,6 +351,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const activeOrderHydratedRef = useRef(false);
   const driverSessionEpochRef = useRef(0);
   const profileAvailabilityRef = useRef<boolean | null>(null);
+  const profileIncompleteRef = useRef(false);
 
   const seenOrderIds = useRef<Set<number>>(new Set());
   const pendingQueueRef = useRef<number[]>([]); // IDs of pending orders not yet shown
@@ -456,6 +457,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     latestStatusUpdateRef.current = null;
     acceptingOrderIdRef.current = null;
     profileAvailabilityRef.current = null;
+    profileIncompleteRef.current = false;
     // These are server-response caches, not a local order database. Never carry
     // another account's offers/history into an offline or failed sync.
     lastOrdersRef.current = [];
@@ -587,7 +589,12 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         ...prev,
         rating: Number(d.rating) || 0,
       }));
-      profileAvailabilityRef.current = d.isAvailable;
+      // A completed profile is required by the remote offers endpoint. An
+      // explicitly null timestamp must not appear as "online, no orders".
+      // Older contracts omit this field; do not invent a restriction then.
+      const wasIncomplete = profileIncompleteRef.current;
+      profileIncompleteRef.current = d.profileCompletedAt === null;
+      profileAvailabilityRef.current = d.isAvailable && !profileIncompleteRef.current;
       // Profile availability is not authoritative while a delivery is active.
       // The backend may briefly report the driver as available while the
       // assigned-order list is catching up.
@@ -595,9 +602,16 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         statusRef.current = 'busy';
         setStatusState('busy');
       } else if (activeOrderHydratedRef.current) {
-        const nextStatus = d.isAvailable ? 'online' : 'offline';
+        const nextStatus = profileAvailabilityRef.current ? 'online' : 'offline';
         statusRef.current = nextStatus;
         setStatusState(nextStatus);
+      }
+      if (profileIncompleteRef.current && d.isAvailable && !wasIncomplete && !activeOrderRef.current) {
+        Alert.alert(
+          'Profil à compléter',
+          'Le serveur ne propose aucune commande tant que votre profil livreur n’est pas complété.',
+          [{ text: 'Compléter mon profil', onPress: () => router.push('/complete-profile') }],
+        );
       }
       setIsApiConnected(true);
     } catch (err) {
@@ -717,6 +731,14 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     if (activeOrderRef.current && s !== 'busy') {
       statusRef.current = 'busy';
       setStatusState('busy');
+      return;
+    }
+    if (s === 'online' && profileIncompleteRef.current) {
+      Alert.alert(
+        'Profil à compléter',
+        'Complétez votre profil livreur pour recevoir les commandes.',
+        [{ text: 'Compléter mon profil', onPress: () => router.push('/complete-profile') }],
+      );
       return;
     }
     const version = ++statusVersionRef.current;
@@ -1412,7 +1434,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const handleSocketEvent = useCallback((event: JatekSocketEvent) => {
     const orderId = getSocketOrderId(event);
 
-    if (event.type === 'order_ready') {
+    if (event.type === 'order_available' || event.type === 'order_ready') {
       pollOrdersRef.current();
       return;
     }
