@@ -16,8 +16,12 @@ Base URL: `https://ma.jatek.app`
 - `GET /api/drivers/:id/earnings` → `{today, thisWeek, thisMonth, totalDeliveries, completedToday}`
 
 ## Orders — TWO separate endpoints (critical)
-- `GET /api/orders` — driver's OWN assigned orders only (filtered by JWT). Returns `[]` if none assigned.
-- `GET /api/orders/available` — ALL orders ready for pickup (unassigned, visible to all online drivers). **This is the main source of incoming orders.** Returns flat structure (different from ApiOrder).
+- `GET /api/orders?driverId=<authenticated driver ID>` — driver's assigned deliveries. Without the driver filter, the consulted backend applies customer ownership (`userId`), not driver ownership.
+- `GET /api/orders/available` — unassigned shop-accepted/confirmed/preparing/ready offers. The consulted backend returns an empty list for unavailable/incomplete/busy drivers. Returns a flatter structure than assigned deliveries.
+
+**Why:** An unfiltered assigned-order request can hide an active delivery while the server correctly blocks new offers, leaving the app apparently online with nothing to receive.
+
+**How to apply:** Scope assigned-order requests to the authenticated driver. Treat successful empty offers separately from failed offer requests; a working profile or assigned endpoint does not prove offers are accessible.
 - `GET /api/orders/:id` — full order details (includes items, customer, all coords). Use after accepting to enrich data.
 - `PATCH /api/orders/:id/status` — `{status, driverId?, otp?}` → updated order. Returns "Not authorized to accept orders for this restaurant" if driver not linked to that restaurant on backend.
 
@@ -33,11 +37,10 @@ Base URL: `https://ma.jatek.app`
 - `GET /api/notifications` → `{notifications[], unreadCount}`
 - `GET /api/categories` → category tree
 
-## Socket.IO — NOT FUNCTIONAL
-- `/socket.io/` returns HTML (reverse proxy intercepts). Polling-only also fails (`server error`).
-- App falls back to 7s polling interval exclusively.
+## Socket.IO
+- The previously observed HTML handshake failure is historical; later checks returned an Engine.IO handshake. Consult the realtime transport memory and verify the current remote response rather than assuming Socket.IO is unavailable.
 
-## Driver record (userId=310, driverId=4) / (userId=314, driverId=5)
+## Driver identity
 - Login maps userId → driverId via `GET /api/drivers` (find by `d.userId === userId`)
 - Order status values (API→app): pending/assigned/ready/ready_for_pickup→incoming, accepted→accepted, at_restaurant→at_restaurant, picked_up→picked_up, delivering/in_progress/out_for_delivery→delivering, delivered/completed→completed
 

@@ -18,6 +18,16 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('documented driver API flow', () => {
+  it('uses the driver ownership filter when loading assigned deliveries', async () => {
+    const orders = [{ id: 501, status: 'accepted', driverId: 7 }];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse(orders));
+    await expect(api.getOrders({ driverId: '7' })).resolves.toEqual(orders);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://ma.jatek.app/api/orders?driverId=7',
+      expect.any(Object),
+    );
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     api.setToken(null);

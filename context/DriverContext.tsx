@@ -352,6 +352,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const driverSessionEpochRef = useRef(0);
   const profileAvailabilityRef = useRef<boolean | null>(null);
   const profileIncompleteRef = useRef(false);
+  /** A successful profile/assigned-order request must not hide failed offers. */
+  const offerRequestFailureRef = useRef<string | null>(null);
 
   const seenOrderIds = useRef<Set<number>>(new Set());
   const pendingQueueRef = useRef<number[]>([]); // IDs of pending orders not yet shown
@@ -458,6 +460,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     acceptingOrderIdRef.current = null;
     profileAvailabilityRef.current = null;
     profileIncompleteRef.current = false;
+    offerRequestFailureRef.current = null;
     // These are server-response caches, not a local order database. Never carry
     // another account's offers/history into an offline or failed sync.
     lastOrdersRef.current = [];
@@ -613,7 +616,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           [{ text: 'Compléter mon profil', onPress: () => router.push('/complete-profile') }],
         );
       }
-      setIsApiConnected(true);
+      setIsApiConnected(offerRequestFailureRef.current === null);
     } catch (err) {
       console.warn('[DriverContext] loadProfile failed:', err);
       setIsApiConnected(false);
@@ -1013,7 +1016,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       const localActiveOrder = activeOrderRef.current;
       const isOnline = currentStatus === 'online' && !localActiveOrder;
       const [assignedResult, availableResult, detailResult] = await Promise.allSettled([
-        api.getOrders(),
+        // Without this filter the backend applies customer ownership (userId),
+        // hiding this driver's assigned delivery and its busy state.
+        api.getOrders({ driverId: String(driverId) }),
         isOnline ? api.getAvailableOrders() : Promise.resolve([] as ApiAvailableOrder[]),
         localActiveOrder
           ? api.getOrder(localActiveOrder.apiId)
@@ -1035,6 +1040,27 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       const availableFromServer: ApiAvailableOrder[] = availableRequestSucceeded
         ? availableResult.value
         : [];
+      if (isOnline && availableResult.status === 'rejected') {
+        const error = availableResult.reason;
+        const message = error instanceof Error
+          ? error.message.slice(0, 240)
+          : 'Impossible de récupérer les offres du serveur.';
+        const failure = error instanceof ApiError
+          ? `${message} (HTTP ${error.status})`
+          : message;
+        if (offerRequestFailureRef.current !== failure) {
+          offerRequestFailureRef.current = failure;
+          // Authentication failures already use the session-expired flow.
+          if (!(error instanceof ApiError && error.status === 401)) {
+            Alert.alert(
+              'Réception des commandes bloquée',
+              `${failure}\n\nLa connexion au profil ne signifie pas que les offres sont accessibles. L’app réessaie automatiquement.`,
+            );
+          }
+        }
+      } else if (isOnline && availableRequestSucceeded) {
+        offerRequestFailureRef.current = null;
+      }
       // A single failed list request is not an empty list. Keep the last
       // authoritative snapshot so transient network/5xx errors do not erase
       // offers or make an active delivery disappear from the UI.
@@ -1087,7 +1113,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       setLastSyncAt(new Date());
       setIsApiConnected(
         assignedRequestSucceeded &&
-        (!isOnline || availableRequestSucceeded || !localActiveOrder),
+        (!isOnline || availableRequestSucceeded),
       );
 
       if (assignedRequestSucceeded) {

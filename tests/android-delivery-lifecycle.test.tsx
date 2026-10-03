@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
+import { Alert } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const storage = vi.hoisted(() => {
@@ -164,6 +165,7 @@ describe('Android delivery lifecycle smoke flow', () => {
   let updateOrderStatus: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    vi.mocked(Alert.alert).mockClear();
     storage.clear();
     storage.getItem.mockClear();
     storage.setItem.mockClear();
@@ -246,6 +248,53 @@ describe('Android delivery lifecycle smoke flow', () => {
       act(() => renderer.unmount());
     },
   );
+
+  it('loads driver assignments rather than orders purchased by the driver account', async () => {
+    getOrders.mockImplementation(async (params?: Record<string, string>) => (
+      params?.driverId === String(DRIVER_ID)
+        ? [serverOrder('accepted', DRIVER_ID)]
+        : []
+    ));
+    getAvailableOrders.mockResolvedValue([]);
+    let renderer!: ReturnType<typeof TestRenderer.create>;
+    await act(async () => {
+      renderer = TestRenderer.create(<DriverProvider><Probe /></DriverProvider>);
+    });
+    await settle();
+    expect(getOrders).toHaveBeenCalledWith({ driverId: String(DRIVER_ID) });
+    expect(latest?.activeOrder?.apiId).toBe(ORDER_ID);
+    expect(latest?.status).toBe('busy');
+    expect(latest?.incomingOrder).toBeNull();
+    act(() => renderer.unmount());
+  });
+
+  it('reports failed offers even when the assigned-order endpoint succeeds, then recovers', async () => {
+    getAvailableOrders.mockRejectedValue(new Error('Offres temporairement indisponibles'));
+    let renderer!: ReturnType<typeof TestRenderer.create>;
+    await act(async () => {
+      renderer = TestRenderer.create(<DriverProvider><Probe /></DriverProvider>);
+    });
+    await settle();
+    expect(latest?.status).toBe('online');
+    expect(latest?.isApiConnected).toBe(false);
+    expect(latest?.incomingOrder).toBeNull();
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Réception des commandes bloquée',
+      expect.stringContaining('Offres temporairement indisponibles'),
+    );
+    const alerts = vi.mocked(Alert.alert).mock.calls.length;
+    await act(async () => { appState.emit('active'); });
+    await settle();
+    await act(async () => { await latest?.refreshProfile(); });
+    expect(latest?.isApiConnected).toBe(false);
+    expect(Alert.alert).toHaveBeenCalledTimes(alerts);
+    getAvailableOrders.mockResolvedValue([availableOrder()]);
+    await act(async () => { appState.emit('active'); });
+    await settle();
+    expect(latest?.isApiConnected).toBe(true);
+    expect(latest?.incomingOrder?.apiId).toBe(ORDER_ID);
+    act(() => renderer.unmount());
+  });
 
   it('explains an explicitly incomplete remote profile instead of appearing online with no offers', async () => {
     const profile = await api.getCurrentDriver();
