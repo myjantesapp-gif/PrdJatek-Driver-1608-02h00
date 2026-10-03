@@ -618,6 +618,9 @@ class JatekApi {
 
   /** Finalizes delivery with the customer's 4-digit pickup code. */
   async confirmDelivery(orderId: number, pickupCode: string): Promise<ApiOrder> {
+    if (!/^\d{4}$/.test(pickupCode)) {
+      throw new Error('Le code de livraison doit contenir 4 chiffres.');
+    }
     const response = await this.request<unknown>(`/api/orders/${orderId}/confirm-delivery`, {
       method: 'POST',
       body: JSON.stringify({ pickupCode }),

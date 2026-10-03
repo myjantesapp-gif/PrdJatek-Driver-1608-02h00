@@ -27,6 +27,7 @@ export function mapApiStatus(apiStatus: string): DeliveryStatus | null {
     case 'accepted':
     case 'assigned':
     case 'confirmed':
+    case 'preparing':
       return 'accepted';
     case 'at_restaurant':
     case 'driver_at_restaurant':
@@ -81,6 +82,13 @@ export function isAllowedStatusTransition(from: DeliveryStatus, to: DeliveryStat
   }
 }
 
+/** Keep the two remote travel stages distinct; delivering means out_for_delivery. */
+export function mapAppStatusToApi(status: DeliveryStatus): string {
+  if (status === 'at_restaurant') return 'driver_at_restaurant';
+  if (status === 'delivering') return 'out_for_delivery';
+  if (status === 'completed') return 'delivered';
+  return status;
+}
 /**
  * A poll can omit an accepted order while the server is delayed or return a
  * different order while the local delivery is still active. Only an explicit
@@ -212,4 +220,8 @@ export type WebLocationFailure = 'unavailable' | 'permission-denied' | 'timeout'
  */
 export function getWebLocationFallback(_reason: WebLocationFailure) {
   return { ...DEFAULT_MAP_REGION };
+}
+
+export function canConfirmDelivery(status: DeliveryStatus): boolean {
+  return status === 'delivering';
 }

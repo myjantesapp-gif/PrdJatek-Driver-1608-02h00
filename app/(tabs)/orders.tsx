@@ -18,7 +18,8 @@ const STATUS_LABELS: Record<string, string> = {
   accepted: 'Acceptée',
   at_restaurant: 'Au restaurant',
   picked_up: 'Récupérée',
-  delivering: 'En livraison',
+  en_route: 'En route',
+  delivering: 'Chez le client',
 };
 
 function ActiveOrderBanner() {

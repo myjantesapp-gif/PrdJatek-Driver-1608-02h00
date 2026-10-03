@@ -3,7 +3,14 @@
 declare module 'react-test-renderer' {
   import type { ReactElement } from 'react';
 
+  export interface ReactTestInstance {
+    props: Record<string, any>;
+    findByType(type: ReactElement['type']): ReactTestInstance;
+    findAllByType(type: ReactElement['type']): ReactTestInstance[];
+  }
+
   export interface ReactTestRenderer {
+    root: ReactTestInstance;
     unmount(): void;
     update(element: ReactElement): void;
     toJSON(): unknown;

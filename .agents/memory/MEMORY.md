@@ -13,3 +13,4 @@
 - [GitHub binary uploads](github-binary-assets.md) — avoid shell stdout base64 for large files; read bytes directly and verify the Git blob hash
 - [GitHub connector rate limits](github-proxy-rate-limits.md) — throttle writes; use inline tree contents for text and verify tree hashes before updating the branch
 - [Native icon color profiles](native-icon-color-profiles.md) — PNG padding/resizing must preserve ICC profiles or convert correctly to sRGB
+- [Driver milestone authority](driver-milestone-authority.md) — acknowledgement gates the next action; legacy snapshots may falsely imply arrival.

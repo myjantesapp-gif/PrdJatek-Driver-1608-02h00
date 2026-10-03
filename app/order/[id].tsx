@@ -21,6 +21,7 @@ import {
   getNavigationUrls,
   getNextDeliveryStatus,
   getNextOrderStatusLabel,
+  canConfirmDelivery,
 } from '@/lib/delivery-state';
 
 const STEPS = [
@@ -28,7 +29,7 @@ const STEPS = [
   { key: 'at_restaurant', label: 'Au restaurant', icon: 'storefront-outline' as const },
   { key: 'picked_up', label: 'Commande récupérée', icon: 'bag-check-outline' as const },
   { key: 'en_route', label: 'En route vers le client', icon: 'bicycle-outline' as const },
-  { key: 'delivering', label: 'Arrivé chez le client', icon: 'location-outline' as const },
+  { key: 'delivering', label: 'Chez le client — code requis', icon: 'location-outline' as const },
   { key: 'completed', label: 'Livré — OTP requis', icon: 'lock-closed-outline' as const },
 ];
 
@@ -215,7 +216,7 @@ export default function OrderDetailScreen() {
     }
   };
 
-  const isDelivering = order.status === 'delivering';
+  const isDelivering = canConfirmDelivery(order.status);
   const totalItems = order.items.reduce((s, i) => s + i.quantity, 0);
   const subtotal = order.items.reduce((s, i) => s + i.price * i.quantity, 0);
 
@@ -323,7 +324,7 @@ export default function OrderDetailScreen() {
             </Text>
             <OTPInput key={otpKey} length={4} onComplete={handleOTP} error={otpError} />
             {otpError && (
-              <Text style={styles.otpError}>Confirmation impossible. Consultez le message affiché.</Text>
+              <Text style={styles.otpError}>Livraison non confirmée. Consultez le message et réessayez.</Text>
             )}
           </View>
         )}

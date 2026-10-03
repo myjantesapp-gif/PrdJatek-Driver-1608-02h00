@@ -82,8 +82,8 @@ vi.mock('@/hooks/useJatekSocket', () => ({
 }));
 
 import { useDriver, DriverProvider } from '../context/DriverContext';
-import { ACTIVE_ORDER_KEY_PREFIX, api, ApiError, type ApiOrder } from '@/lib/api';
-import { getNextOrderStatusLabel } from '../lib/delivery-state';
+import { ACTIVE_ORDER_KEY_PREFIX, api, ApiError, getDeliveryConfirmationErrorMessage, type ApiOrder } from '@/lib/api';
+import { getNextOrderStatusLabel, getNextDeliveryStatus, type DeliveryStatus } from '../lib/delivery-state';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -221,23 +221,119 @@ describe('Android delivery lifecycle smoke flow', () => {
     });
     vi.spyOn(api, 'updateDriver').mockResolvedValue({} as never);
     vi.spyOn(api, 'registerPushToken').mockResolvedValue({ ok: true });
+    vi.spyOn(api, 'heartbeat').mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    api.setToken(null);
   });
 
-  async function mountActive(remoteStatus: string) {
-    serverStatus = remoteStatus;
+  async function mountActive(status = 'accepted') {
+    serverStatus = status;
     getOrders.mockImplementation(async () => [serverOrder(serverStatus, DRIVER_ID)]);
-    getAvailableOrders.mockResolvedValue([]);
     let renderer!: ReturnType<typeof TestRenderer.create>;
     await act(async () => {
       renderer = TestRenderer.create(<DriverProvider><Probe /></DriverProvider>);
     });
     await settle();
+    expect(latest?.activeOrder?.apiId).toBe(ORDER_ID);
     return renderer;
   }
+
+  async function transition(status: DeliveryStatus) {
+    await act(async () => {
+      await expect(latest?.updateOrderStatus(String(ORDER_ID), status)).resolves.toBe(true);
+    });
+  }
+
+  it('completes the strict flow through real API methods against a local contract double', async () => {
+    const renderer = await mountActive();
+    updateOrderStatus.mockRestore();
+    api.setToken('test-token');
+    const next: Record<string, string> = {
+      accepted: 'driver_at_restaurant',
+      driver_at_restaurant: 'picked_up',
+      picked_up: 'en_route',
+      en_route: 'out_for_delivery',
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      expect(init?.headers).toMatchObject({ Authorization: 'Bearer test-token' });
+      if (init?.method === 'PATCH') {
+        expect(Object.keys(body)).toEqual(['status']);
+        if (next[serverStatus] !== body.status) {
+          return new Response(JSON.stringify({ error: 'Invalid transition' }), { status: 409 });
+        }
+        serverStatus = body.status;
+      } else {
+        expect(body).toEqual({ pickupCode: '7364' });
+        expect(serverStatus).toBe('out_for_delivery');
+        serverStatus = 'delivered';
+      }
+      return new Response(JSON.stringify(serverOrder(serverStatus, DRIVER_ID)));
+    });
+    for (const state of ['at_restaurant', 'picked_up', 'en_route', 'delivering'] as const) {
+      await transition(state);
+      expect(latest?.activeOrder?.status).toBe(state);
+    }
+    await act(async () => {
+      await expect(latest?.validateOTP(String(ORDER_ID), '7364')).resolves.toBe(true);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(latest?.activeOrder).toBeNull();
+    expect(latest?.terminalOrder?.status).toBe('completed');
+    expect(latest?.history.filter(o => o.apiId === ORDER_ID)).toHaveLength(1);
+    expect(latest?.status).toBe('online');
+    expect(await storage.getItem(`${ACTIVE_ORDER_KEY_PREFIX}${DRIVER_ID}`)).toBeNull();
+    act(() => renderer.unmount());
+  });
+
+  it('rejects skipped milestones and OTP before arrival without sending mutations', async () => {
+    const renderer = await mountActive();
+    const confirm = vi.spyOn(api, 'confirmDelivery');
+    await act(async () => {
+      for (const status of ['picked_up', 'en_route', 'delivering', 'completed'] as const) {
+        await expect(latest?.updateOrderStatus(String(ORDER_ID), status)).resolves.toBe(false);
+      }
+      await expect(latest?.validateOTP(String(ORDER_ID), '7364')).resolves.toBe(false);
+    });
+    expect(updateOrderStatus).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(latest?.activeOrder?.status).toBe('accepted');
+    act(() => renderer.unmount());
+  });
+
+  it.each([
+    ['accepted', false, 'accepted'],
+    ['driver_at_restaurant', true, 'at_restaurant'],
+    ['picked_up', true, 'picked_up'],
+  ])('reconciles a status conflict with remote %s', async (remoteStatus, success, localStatus) => {
+    const renderer = await mountActive();
+    updateOrderStatus.mockImplementation(async () => {
+      serverStatus = remoteStatus;
+      throw new ApiError('Cette étape a déjà été modifiée. Actualisez la course.', 409, null);
+    });
+    await act(async () => {
+      await expect(latest?.updateOrderStatus(String(ORDER_ID), 'at_restaurant')).resolves.toBe(success);
+    });
+    expect(latest?.activeOrder?.status).toBe(localStatus);
+    expect(getOrder).toHaveBeenCalledWith(ORDER_ID);
+    expect(updateOrderStatus).toHaveBeenCalledTimes(1);
+    act(() => renderer.unmount());
+  });
+
+  it('retains a confirmed step when status request and reconciliation are unavailable', async () => {
+    const renderer = await mountActive('picked_up');
+    updateOrderStatus.mockRejectedValue(new ApiError('Impossible de joindre l’API Jatek.', 0, null));
+    getOrder.mockRejectedValue(new Error('Offline'));
+    await act(async () => {
+      await expect(latest?.updateOrderStatus(String(ORDER_ID), 'en_route')).resolves.toBe(false);
+    });
+    expect(latest?.activeOrder?.status).toBe('picked_up');
+    expect(latest?.status).toBe('busy');
+    act(() => renderer.unmount());
+  });
 
   it('follows every strict backend milestone and only confirms OTP after arrival', async () => {
     const renderer = await mountActive('assigned');
@@ -357,6 +453,230 @@ describe('Android delivery lifecycle smoke flow', () => {
     expect(confirm).not.toHaveBeenCalled();
     act(() => renderer.unmount());
   });
+
+  it.each(['delivered', 'cancelled'])(
+    'applies terminal GET %s after PATCH failure even when further polling is unavailable',
+    async (remoteStatus) => {
+      const renderer = await mountActive('picked_up');
+      await settle();
+      const detailReadsBefore = getOrder.mock.calls.length;
+      getOrders.mockRejectedValue(new Error('Polling unavailable'));
+      getAvailableOrders.mockRejectedValue(new Error('Queue unavailable'));
+      getOrder.mockResolvedValueOnce(serverOrder(remoteStatus, DRIVER_ID))
+        .mockRejectedValue(new Error('Further detail reads unavailable'));
+      vi.mocked(api.updateDriver).mockRejectedValue(new Error('Availability write unavailable'));
+      updateOrderStatus.mockRejectedValue(new ApiError('Connection interrupted', 0, null));
+      await act(async () => {
+        await expect(latest?.updateOrderStatus(String(ORDER_ID), 'en_route'))
+          .resolves.toBe(remoteStatus === 'delivered');
+      });
+      expect(latest?.activeOrder).toBeNull();
+      expect(latest?.terminalOrder?.status)
+        .toBe(remoteStatus === 'delivered' ? 'completed' : 'cancelled');
+      expect(latest?.status).toBe('online');
+      expect(latest?.history.filter(o => o.apiId === ORDER_ID))
+        .toHaveLength(remoteStatus === 'delivered' ? 1 : 0);
+      expect(await storage.getItem(`${ACTIVE_ORDER_KEY_PREFIX}${DRIVER_ID}`)).toBeNull();
+      expect(api.updateDriver).toHaveBeenCalledWith(DRIVER_ID, { isAvailable: true });
+      // Returning online may start a new offer poll. Its failure must not
+      // undo the terminal state or require another read of this order.
+      expect(getOrder).toHaveBeenCalledTimes(detailReadsBefore + 1);
+      act(() => renderer.unmount());
+    },
+  );
+
+  it('applies a cancelled confirmation recovery read without a second poll', async () => {
+    const renderer = await mountActive('out_for_delivery');
+    getOrders.mockRejectedValue(new Error('Polling unavailable'));
+    getAvailableOrders.mockRejectedValue(new Error('Queue unavailable'));
+    getOrder.mockResolvedValueOnce(serverOrder('cancelled', DRIVER_ID))
+      .mockRejectedValue(new Error('Further detail reads unavailable'));
+    vi.spyOn(api, 'confirmDelivery').mockRejectedValue(new ApiError('Confirmation conflict', 409, null));
+    await act(async () => {
+      await expect(latest?.validateOTP(String(ORDER_ID), '7364')).resolves.toBe(false);
+    });
+    expect(latest?.activeOrder).toBeNull();
+    expect(latest?.terminalOrder?.status).toBe('cancelled');
+    expect(latest?.status).toBe('online');
+    expect(latest?.history).toHaveLength(0);
+    expect(await storage.getItem(`${ACTIVE_ORDER_KEY_PREFIX}${DRIVER_ID}`)).toBeNull();
+    act(() => renderer.unmount());
+  });
+
+  it.each(['driver_at_restaurant', 'accepted'])(
+    'verifies an empty status response against the remote %s state',
+    async (remoteStatus) => {
+      const renderer = await mountActive();
+      updateOrderStatus.mockRestore();
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        serverStatus = remoteStatus;
+        return new Response(null, { status: 204 });
+      });
+      await act(async () => {
+        await expect(latest?.updateOrderStatus(String(ORDER_ID), 'at_restaurant'))
+          .resolves.toBe(remoteStatus === 'driver_at_restaurant');
+      });
+      expect(latest?.activeOrder?.status)
+        .toBe(remoteStatus === 'driver_at_restaurant' ? 'at_restaurant' : 'accepted');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      act(() => renderer.unmount());
+    },
+  );
+
+  it('recovers a status committed before a connection interruption', async () => {
+    const renderer = await mountActive('picked_up');
+    updateOrderStatus.mockImplementation(async () => {
+      serverStatus = 'en_route';
+      throw new ApiError('Impossible de joindre l’API Jatek.', 0, null);
+    });
+    await transition('en_route');
+    expect(latest?.activeOrder?.status).toBe('en_route');
+    expect(getNextDeliveryStatus(latest!.activeOrder!.status)).toBe('delivering');
+    act(() => renderer.unmount());
+  });
+
+  it('does not expose OTP or send duplicate actions while arrival is in flight', async () => {
+    const renderer = await mountActive('en_route');
+    const confirm = vi.spyOn(api, 'confirmDelivery');
+    let resolve!: (order: ApiOrder) => void;
+    updateOrderStatus.mockImplementation(() => new Promise(r => { resolve = r; }));
+    let pending!: Promise<boolean>;
+    act(() => { pending = latest!.updateOrderStatus(String(ORDER_ID), 'delivering'); });
+    expect(latest?.activeOrder?.status).toBe('en_route');
+    await act(async () => {
+      await expect(latest?.updateOrderStatus(String(ORDER_ID), 'delivering')).resolves.toBe(false);
+      await expect(latest?.validateOTP(String(ORDER_ID), '7364')).resolves.toBe(false);
+      resolve(serverOrder('out_for_delivery', DRIVER_ID));
+      await expect(pending).resolves.toBe(true);
+    });
+    expect(updateOrderStatus).toHaveBeenCalledTimes(1);
+    expect(confirm).not.toHaveBeenCalled();
+    act(() => renderer.unmount());
+  });
+
+  it.each([
+    [400, 'INVALID_PICKUP_CODE', 'Incorrect pickup code'],
+    [410, 'DELIVERY_CODE_EXPIRED', 'Le code de livraison a expiré. Demandez un nouveau code au client.'],
+    [409, 'DELIVERY_CODE_ALREADY_USED', 'Cette livraison a déjà été confirmée. Le code a déjà été utilisé.'],
+    [409, 'DELIVERY_NOT_READY', 'La course doit être arrivée chez le client avant confirmation.'],
+  ])('keeps the delivery and server explanation for OTP %s / %s', async (status, code, message) => {
+    const renderer = await mountActive('out_for_delivery');
+    const confirm = vi.spyOn(api, 'confirmDelivery').mockRejectedValue(
+      new ApiError(message, status, { code }),
+    );
+    await act(async () => {
+      await expect(latest?.validateOTP(String(ORDER_ID), '7364')).resolves.toBe(false);
+    });
+    expect(latest?.activeOrder?.status).toBe('delivering');
+    expect(latest?.status).toBe('busy');
+    expect(latest?.terminalOrder).toBeNull();
+    expect(latest?.history).toHaveLength(0);
+    expect(Alert.alert).toHaveBeenLastCalledWith(
+      'Livraison non confirmée',
+      getDeliveryConfirmationErrorMessage(new ApiError(message, status, { code })),
+    );
+    expect(confirm).toHaveBeenCalledTimes(1);
+    act(() => renderer.unmount());
+  });
+
+  it.each(['network interruption', 'already used code'])(
+    'recognizes an already completed delivery after %s, without resending the OTP',
+    async (failure) => {
+      const renderer = await mountActive('out_for_delivery');
+      const confirm = vi.spyOn(api, 'confirmDelivery').mockImplementation(async () => {
+        serverStatus = 'delivered';
+        throw new ApiError(failure, failure === 'already used code' ? 409 : 0, null);
+      });
+      await act(async () => {
+        await expect(latest?.validateOTP(String(ORDER_ID), '7364')).resolves.toBe(true);
+      });
+      expect(latest?.terminalOrder?.status).toBe('completed');
+      expect(latest?.activeOrder).toBeNull();
+      expect(latest?.history.filter(o => o.apiId === ORDER_ID)).toHaveLength(1);
+      expect(confirm).toHaveBeenCalledTimes(1);
+      act(() => renderer.unmount());
+    },
+  );
+
+  it('keeps the snapshot when confirmation and its read-back both fail, then allows a retry', async () => {
+    const renderer = await mountActive('out_for_delivery');
+    const confirm = vi.spyOn(api, 'confirmDelivery').mockRejectedValueOnce(
+      new ApiError('Impossible de joindre l’API Jatek.', 0, null),
+    );
+    getOrder.mockRejectedValueOnce(new Error('Offline'));
+    await act(async () => {
+      await expect(latest?.validateOTP(String(ORDER_ID), '7364')).resolves.toBe(false);
+    });
+    expect(latest?.activeOrder?.status).toBe('delivering');
+    expect(await storage.getItem(`${ACTIVE_ORDER_KEY_PREFIX}${DRIVER_ID}`)).not.toBeNull();
+    confirm.mockImplementationOnce(async () => {
+      serverStatus = 'delivered';
+      return serverOrder(serverStatus, DRIVER_ID);
+    });
+    await act(async () => {
+      await expect(latest?.validateOTP(String(ORDER_ID), '7364')).resolves.toBe(true);
+    });
+    expect(latest?.activeOrder).toBeNull();
+    expect(latest?.history).toHaveLength(1);
+    act(() => renderer.unmount());
+  });
+
+  it('does not send two OTP confirmations while the first is pending', async () => {
+    const renderer = await mountActive('out_for_delivery');
+    let resolve!: (order: ApiOrder) => void;
+    const confirm = vi.spyOn(api, 'confirmDelivery').mockImplementation(() => new Promise(r => { resolve = r; }));
+    let pending!: Promise<boolean>;
+    act(() => { pending = latest!.validateOTP(String(ORDER_ID), '7364'); });
+    await act(async () => {
+      await expect(latest?.validateOTP(String(ORDER_ID), '7364')).resolves.toBe(false);
+      serverStatus = 'delivered';
+      resolve(serverOrder('delivered', DRIVER_ID));
+      await expect(pending).resolves.toBe(true);
+    });
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(latest?.history).toHaveLength(1);
+    act(() => renderer.unmount());
+  });
+
+  it.each(['delivered', 'out_for_delivery'])(
+    'does not infer completion from an empty OTP response; GET returns %s',
+    async (remoteStatus) => {
+      const renderer = await mountActive('out_for_delivery');
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        serverStatus = remoteStatus;
+        return new Response(null, { status: 204 });
+      });
+      await act(async () => {
+        await expect(latest?.validateOTP(String(ORDER_ID), '7364'))
+          .resolves.toBe(remoteStatus === 'delivered');
+      });
+      expect(latest?.activeOrder === null).toBe(remoteStatus === 'delivered');
+      expect(latest?.history).toHaveLength(remoteStatus === 'delivered' ? 1 : 0);
+      act(() => renderer.unmount());
+    },
+  );
+
+  it.each(['driver_at_restaurant', 'picked_up', 'en_route', 'out_for_delivery'])(
+    'restores remote milestone %s after termination, not the stale snapshot',
+    async (remoteStatus) => {
+      let renderer = await mountActive('out_for_delivery');
+      await settle();
+      act(() => renderer.unmount());
+      serverStatus = remoteStatus;
+      await act(async () => {
+        renderer = TestRenderer.create(<DriverProvider><Probe /></DriverProvider>);
+      });
+      await settle();
+      const expected: Record<string, DeliveryStatus> = {
+        driver_at_restaurant: 'at_restaurant', picked_up: 'picked_up',
+        en_route: 'en_route', out_for_delivery: 'delivering',
+      };
+      expect(latest?.activeOrder?.status).toBe(expected[remoteStatus]);
+      expect(getNextDeliveryStatus(latest!.activeOrder!.status))
+        .toBe(getNextDeliveryStatus(expected[remoteStatus]));
+      act(() => renderer.unmount());
+    },
+  );
 
   it.each(['accepted', 'confirmed', 'preparing', 'ready'])(
     'shows a remote %s offer and preserves its distance in kilometers',
@@ -550,7 +870,8 @@ describe('Android delivery lifecycle smoke flow', () => {
       'en_route',
     );
     expect(latest?.activeOrder?.status).toBe('en_route');
-    expect(getNextOrderStatusLabel(latest?.activeOrder?.status ?? 'cancelled')).toBe('Je suis arrivé chez le client');
+    expect(getNextOrderStatusLabel(latest?.activeOrder?.status ?? 'cancelled'))
+      .toBe('Je suis arrivé chez le client');
 
     renderer.unmount();
   });

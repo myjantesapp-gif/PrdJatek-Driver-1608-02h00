@@ -94,36 +94,49 @@ describe('documented driver API flow', () => {
   });
 
   it('accepts, advances, and confirms one delivery with the documented payloads', async () => {
+    api.setToken('test-token');
     const acceptedOrder = {
       id: 103,
-      status: 'picked_up',
+      status: 'accepted',
       driverId: 7,
       createdAt: '2026-08-26T08:00:00.000Z',
     };
-    const enRouteOrder = { ...acceptedOrder, status: 'en_route' };
+    const milestones = ['driver_at_restaurant', 'picked_up', 'en_route', 'out_for_delivery'];
     const deliveredOrder = { ...acceptedOrder, status: 'delivered' };
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse(acceptedOrder))
-      .mockResolvedValueOnce(jsonResponse(enRouteOrder))
+      .mockResolvedValueOnce(jsonResponse({ ...acceptedOrder, status: milestones[0] }))
+      .mockResolvedValueOnce(jsonResponse({ ...acceptedOrder, status: milestones[1] }))
+      .mockResolvedValueOnce(jsonResponse({ ...acceptedOrder, status: milestones[2] }))
+      .mockResolvedValueOnce(jsonResponse({ ...acceptedOrder, status: milestones[3] }))
       .mockResolvedValueOnce(jsonResponse(deliveredOrder));
 
     await expect(api.acceptDelivery(103, 7)).resolves.toMatchObject(acceptedOrder);
-    await expect(api.updateOrderStatus(103, 'en_route'))
-      .resolves.toMatchObject(enRouteOrder);
+    for (const status of milestones) {
+      await expect(api.updateOrderStatus(103, status)).resolves.toMatchObject({ status });
+    }
     await expect(api.confirmDelivery(103, '7364')).resolves.toMatchObject(deliveredOrder);
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       'https://ma.jatek.app/api/orders/103/accept-delivery',
       'https://ma.jatek.app/api/orders/103/status',
+      'https://ma.jatek.app/api/orders/103/status',
+      'https://ma.jatek.app/api/orders/103/status',
+      'https://ma.jatek.app/api/orders/103/status',
       'https://ma.jatek.app/api/orders/103/confirm-delivery',
     ]);
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ driverId: 7 });
-    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
-      status: 'en_route',
-    });
-    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({
+    for (let i = 0; i < milestones.length; i++) {
+      expect(JSON.parse(String(fetchMock.mock.calls[i + 1][1]?.body))).toEqual({
+        status: milestones[i],
+      });
+    }
+    expect(JSON.parse(String(fetchMock.mock.calls[5][1]?.body))).toEqual({
       pickupCode: '7364',
     });
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init?.headers).toMatchObject({ Authorization: 'Bearer test-token' });
+    }
   });
 
   it('reconciles an empty accept response before showing the order as accepted', async () => {
@@ -357,6 +370,39 @@ describe('documented driver API flow', () => {
       'https://ma.jatek.app/api/orders/103/status',
       'https://ma.jatek.app/api/orders/103',
       'https://ma.jatek.app/api/orders/103/status',
+    ]);
+  });
+
+  it.each([
+    [400, 'INVALID_PICKUP_CODE', 'Incorrect pickup code'],
+    [410, 'DELIVERY_CODE_EXPIRED', 'Le code de livraison a expiré. Demandez un nouveau code au client.'],
+    [409, 'DELIVERY_CODE_ALREADY_USED', 'Cette livraison a déjà été confirmée. Le code a déjà été utilisé.'],
+    [409, 'DELIVERY_NOT_READY', 'La course doit être arrivée chez le client avant confirmation.'],
+  ])('preserves OTP error %s / %s without retrying the mutation', async (status, code, message) => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      jsonResponse({ error: message, code }, status),
+    );
+    await expect(api.confirmDelivery(103, '7364')).rejects.toMatchObject({
+      status, message, data: { code },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['', 'abcd', '123', '12345'])('rejects malformed OTP %j without a request', async (code) => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    await expect(api.confirmDelivery(103, code)).rejects.toThrow('4 chiffres');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('reads the authoritative order after an empty confirmation response', async () => {
+    const delivered = { id: 103, status: 'delivered' };
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(jsonResponse({ data: { order: delivered } }));
+    await expect(api.confirmDelivery(103, '7364')).resolves.toEqual(delivered);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://ma.jatek.app/api/orders/103/confirm-delivery',
+      'https://ma.jatek.app/api/orders/103',
     ]);
   });
 });
