@@ -1,3 +1,4 @@
+import { formatMAD } from '@/lib/money';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
@@ -111,7 +112,7 @@ export function LiveOrderAlert({ order, onAccept, onDecline }: LiveOrderAlertPro
           <Text style={styles.detail}>{totalItems} article{totalItems > 1 ? 's' : ''}</Text>
         </View>
         <View style={styles.earningsBig}>
-          <Text style={styles.earningsAmount}>{order.earnings.toFixed(2)} €</Text>
+          <Text style={styles.earningsAmount}>{formatMAD(order.earnings)}</Text>
         </View>
       </View>
 
@@ -150,9 +151,9 @@ export function LiveOrderAlert({ order, onAccept, onDecline }: LiveOrderAlertPro
           activeOpacity={0.8}
         >
           {accepting ? (
-            <ActivityIndicator size="small" color="#000" />
+            <ActivityIndicator size="small" color={Colors.card} />
           ) : (
-            <Ionicons name="checkmark" size={20} color="#000" />
+            <Ionicons name="checkmark" size={20} color={Colors.card} />
           )}
           <Text style={styles.acceptText}>{accepting ? 'Connexion…' : 'Accepter'}</Text>
         </TouchableOpacity>
@@ -172,9 +173,9 @@ const styles = StyleSheet.create({
     padding: 18,
     borderWidth: 1.5,
     borderColor: Colors.primary + '60',
-    shadowColor: Colors.primary,
+    shadowColor: Colors.text,
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.14,
     shadowRadius: 20,
     elevation: 20,
     zIndex: 1000,
@@ -186,7 +187,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   newBadge: {
-    backgroundColor: 'rgba(233,30,140,0.15)',
+    backgroundColor: '#FCE4EF',
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 6,
@@ -229,7 +230,7 @@ const styles = StyleSheet.create({
     width: 50,
     height: 50,
     borderRadius: 14,
-    backgroundColor: 'rgba(233,30,140,0.1)',
+    backgroundColor: '#FCE4EF',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -295,7 +296,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 52,
     borderRadius: 26,
-    backgroundColor: Colors.success,
+    backgroundColor: Colors.primary,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -305,7 +306,7 @@ const styles = StyleSheet.create({
     opacity: 0.65,
   },
   acceptText: {
-    color: '#000',
+    color: Colors.card,
     fontSize: 16,
     fontWeight: '800',
   },

@@ -116,11 +116,11 @@ export default function CompleteProfileScreen() {
           activeOpacity={0.85}
         >
           {loading ? (
-            <ActivityIndicator color="#000" />
+            <ActivityIndicator color={Colors.card} />
           ) : (
             <>
               <Text style={styles.submitText}>Enregistrer mon profil</Text>
-              <Ionicons name="arrow-forward" size={18} color="#000" />
+              <Ionicons name="arrow-forward" size={18} color={Colors.card} />
             </>
           )}
         </TouchableOpacity>
@@ -183,7 +183,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(233,30,140,0.12)',
+    backgroundColor: '#FCE4EF',
     borderWidth: 1,
     borderColor: Colors.primary + '40',
     marginBottom: 18,
@@ -252,7 +252,7 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   submitText: {
-    color: '#000',
+    color: Colors.card,
     fontSize: 15,
     fontFamily: 'Poppins_700Bold',
   },

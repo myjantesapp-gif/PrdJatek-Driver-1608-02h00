@@ -13,8 +13,8 @@ interface StatusToggleProps {
 
 const STATUS_CONFIG = {
   online: { label: 'En ligne', color: Colors.online, icon: 'radio-button-on' as const, bg: Colors.successBg },
-  offline: { label: 'Hors ligne', color: Colors.offline, icon: 'radio-button-off' as const, bg: 'rgba(96,96,122,0.12)' },
-  busy: { label: 'Occupé', color: Colors.busy, icon: 'ellipse' as const, bg: Colors.warningBg },
+  offline: { label: 'Hors ligne', color: Colors.offline, icon: 'radio-button-off' as const, bg: Colors.surface },
+  busy: { label: 'En livraison', color: Colors.busy, icon: 'ellipse' as const, bg: Colors.warningBg },
 };
 
 export function StatusToggle({ status, onToggle, disabled = false }: StatusToggleProps) {
@@ -51,6 +51,9 @@ export function StatusToggle({ status, onToggle, disabled = false }: StatusToggl
       onPress={handlePress}
       disabled={disabled}
       activeOpacity={0.8}
+      accessibilityRole="button"
+      accessibilityLabel={status === 'online' ? 'Mettre ma disponibilité en pause' : status === 'offline' ? 'Passer en ligne pour recevoir des commandes' : 'Livraison en cours'}
+      accessibilityState={{ disabled }}
     >
       <View style={styles.left}>
         <View style={styles.iconWrap}>
@@ -63,9 +66,9 @@ export function StatusToggle({ status, onToggle, disabled = false }: StatusToggl
         </View>
         <Text style={[styles.label, { color: config.color }]}>{config.label}</Text>
       </View>
-      <View style={[styles.pill, { backgroundColor: status === 'online' ? Colors.online : Colors.surface }]}>
-        <Text style={[styles.pillText, { color: status === 'online' ? '#000' : Colors.textMuted }]}>
-          {status === 'online' ? 'Toucher pour pauser' : 'Toucher pour démarrer'}
+      <View style={[styles.pill, { backgroundColor: status === 'online' ? Colors.online : Colors.card }]}>
+        <Text style={[styles.pillText, { color: status === 'online' ? Colors.card : Colors.textSecondary }]}>
+          {status === 'online' ? 'Mettre en pause' : status === 'offline' ? 'Passer en ligne' : 'Course en cours'}
         </Text>
       </View>
     </TouchableOpacity>
@@ -78,8 +81,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: Colors.radius,
+    paddingVertical: 13,
+    borderRadius: 24,
     borderWidth: 1,
   },
   left: {
@@ -107,7 +110,7 @@ const styles = StyleSheet.create({
   },
   pill: {
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 7,
     borderRadius: 20,
   },
   pillText: {

@@ -1,20 +1,17 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Image, StyleSheet, Text, View } from 'react-native';
 import { Colors } from '@/constants/colors';
 
 export function AuthBrand({ compact = false }: { compact?: boolean }) {
   return (
     <View style={[styles.hero, compact && styles.heroCompact]}>
-      <View style={styles.brandRow}>
-        <View style={styles.mark}>
-          <Ionicons name="car-sport" size={compact ? 22 : 28} color={Colors.authPink} />
-        </View>
-        <View>
-          <Text style={[styles.wordmark, compact && styles.wordmarkCompact]}>Jatek</Text>
-          <Text style={styles.driver}>JATEK DRIVER</Text>
-        </View>
-      </View>
+      <Image
+        source={require('../assets/jatek-logo-transparent.png')}
+        style={[styles.logo, compact && styles.logoCompact]}
+        resizeMode="contain"
+        accessibilityLabel="Logo Jatek Driver"
+      />
+      <Text style={styles.driver}>JATEK DRIVER</Text>
       {!compact && (
         <Text style={styles.tagline}>Livrez simplement. Avancez sereinement.</Text>
       )}
@@ -24,51 +21,39 @@ export function AuthBrand({ compact = false }: { compact?: boolean }) {
 
 const styles = StyleSheet.create({
   hero: {
-    backgroundColor: Colors.authPink,
+    backgroundColor: Colors.background,
     paddingHorizontal: 24,
-    paddingTop: 44,
-    paddingBottom: 34,
+    paddingTop: 32,
+    paddingBottom: 26,
     borderBottomLeftRadius: 32,
     borderBottomRightRadius: 32,
+    alignItems: 'center',
   },
   heroCompact: {
-    paddingTop: 26,
-    paddingBottom: 22,
+    paddingTop: 20,
+    paddingBottom: 18,
   },
-  brandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
+  logo: {
+    width: 140,
+    height: 140,
+    marginBottom: 10,
   },
-  mark: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  wordmark: {
-    color: '#FFFFFF',
-    fontSize: 38,
-    lineHeight: 40,
-    fontFamily: 'Poppins_800ExtraBold',
-    letterSpacing: -1.5,
-  },
-  wordmarkCompact: {
-    fontSize: 28,
-    lineHeight: 30,
+  logoCompact: {
+    width: 96,
+    height: 96,
+    marginBottom: 7,
   },
   driver: {
-    color: '#FFFFFF',
+    color: Colors.text,
     fontSize: 11,
     fontFamily: 'Poppins_700Bold',
     letterSpacing: 2,
   },
   tagline: {
-    color: '#FFE2F0',
+    color: Colors.textSecondary,
     fontSize: 13,
     fontFamily: 'Poppins_500Medium',
-    marginTop: 22,
+    marginTop: 10,
+    textAlign: 'center',
   },
 });

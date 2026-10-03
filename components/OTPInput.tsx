@@ -91,7 +91,7 @@ const styles = StyleSheet.create({
   },
   inputFilled: {
     borderColor: Colors.primary,
-    backgroundColor: 'rgba(233,30,140,0.1)',
+    backgroundColor: '#FCE4EF',
   },
   inputError: {
     borderColor: Colors.error,

@@ -1,6 +1,6 @@
 const appJson = require('./app.json');
 
-const mapsApiKey = process.env.GOOGLE_MAPS_API_KEY?.trim();
+const mapsApiKey = process.env.GOOGLE_MAPS_API_KEY || ""?.trim();
 const baseExpoConfig = appJson.expo;
 const isEasNativeBuild = process.env.EAS_BUILD === 'true';
 

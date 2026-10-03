@@ -1,3 +1,4 @@
+import { formatMAD } from '@/lib/money';
 import React from 'react';
 import {
   View,
@@ -18,7 +19,8 @@ const STATUS_LABELS: Record<string, string> = {
   accepted: 'Acceptée',
   at_restaurant: 'Au restaurant',
   picked_up: 'Récupérée',
-  delivering: 'En livraison',
+  en_route: 'En route',
+  delivering: 'Chez le client',
 };
 
 function ActiveOrderBanner() {
@@ -106,7 +108,7 @@ export default function OrdersScreen() {
                   </View>
                 </View>
                 <View style={styles.completedRight}>
-                  <Text style={styles.completedEarnings}>+{order.earnings.toFixed(2)} €</Text>
+                  <Text style={styles.completedEarnings}>+{formatMAD(order.earnings)}</Text>
                   {order.rating !== undefined && (
                     <View style={styles.ratingRow}>
                       <Ionicons name="star" size={12} color={Colors.secondary} />
@@ -143,7 +145,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
   },
   busyBadge: {
-    backgroundColor: 'rgba(233,30,140,0.15)',
+    backgroundColor: '#FCE4EF',
     paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: 20,

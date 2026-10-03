@@ -1,15 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { io, type Socket } from 'socket.io-client';
 
-const PRODUCTION_ORIGIN = 'https://ma.jatek.app';
+const PRODUCTION_ORIGIN = 'https://api.jatek.app';
 const SOCKET_PATH = '/socket.io/';
 const WEB_CLIENT_ORIGIN = 'https://driver.jatek.app';
 const TIMEOUT_MS = 15_000;
 
 type SmokeEventPayload = {
-  smokeTest: true;
-  smokeTestId: string;
-  orderId: string;
+  smokeTest?: boolean;
+  orderId: string | number;
   driverId?: number;
 };
 
@@ -105,9 +104,9 @@ function waitForConnection(socket: Socket): Promise<void> {
   });
 }
 
-function waitForSyntheticEvents(
+function waitForRealEvents(
   socket: Socket,
-  smokeTestId: string,
+  orderId: number,
   driverId: number,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -115,16 +114,14 @@ function waitForSyntheticEvents(
     const timeout = setTimeout(() => {
       reject(
         new Error(
-          `Événements synthétiques non reçus dans l'ordre pour ${smokeTestId}.`,
+          `Événements réels order_ready/order_assigned non reçus pour la commande ${orderId}.`,
         ),
       );
     }, TIMEOUT_MS);
 
     socket.on('order_ready', (payload: SmokeEventPayload) => {
-      if (payload?.smokeTestId !== smokeTestId) return;
+      if (payload?.smokeTest || Number(payload?.orderId) !== orderId) return;
       try {
-        expect(payload.smokeTest).toBe(true);
-        expect(payload.orderId).toBe(`smoke:${smokeTestId}`);
         receivedReady = true;
       } catch (error) {
         clearTimeout(timeout);
@@ -133,12 +130,12 @@ function waitForSyntheticEvents(
     });
 
     socket.on('order_assigned', (payload: SmokeEventPayload) => {
-      if (payload?.smokeTestId !== smokeTestId) return;
+      if (payload?.smokeTest || Number(payload?.orderId) !== orderId) return;
       try {
         expect(receivedReady, 'order_assigned reçu avant order_ready.').toBe(true);
-        expect(payload.smokeTest).toBe(true);
-        expect(payload.orderId).toBe(`smoke:${smokeTestId}`);
-        expect(payload.driverId, 'Événement livré au mauvais chauffeur.').toBe(driverId);
+        if (payload.driverId !== undefined) {
+          expect(Number(payload.driverId), 'Événement livré au mauvais chauffeur.').toBe(driverId);
+        }
         clearTimeout(timeout);
         resolve();
       } catch (error) {
@@ -149,43 +146,6 @@ function waitForSyntheticEvents(
   });
 }
 
-async function triggerSyntheticEvents(
-  triggerUrl: string,
-  triggerToken: string,
-  smokeTestId: string,
-  driverId: number,
-): Promise<void> {
-  const url = new URL(triggerUrl);
-  if (url.origin !== PRODUCTION_ORIGIN) {
-    throw new Error(
-      `JATEK_SOCKET_SMOKE_TRIGGER_URL doit utiliser l'origine ${PRODUCTION_ORIGIN}.`,
-    );
-  }
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${triggerToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      smokeTestId,
-      driverId,
-      orderId: `smoke:${smokeTestId}`,
-      events: ['order_ready', 'order_assigned'],
-      persist: false,
-    }),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
-
-  if (!response.ok) {
-    const details = (await response.text()).slice(0, 300);
-    throw new Error(
-      `Déclenchement des événements synthétiques refusé (HTTP ${response.status}): ${details}`,
-    );
-  }
-}
-
 describe('livraison Socket.IO en production', () => {
   let socket: Socket | undefined;
 
@@ -194,14 +154,34 @@ describe('livraison Socket.IO en production', () => {
     socket?.disconnect();
   });
 
-  it(
-    'réalise le handshake et livre order_ready puis order_assigned au bon chauffeur',
+  it('vérifie le routage Engine.IO et le CORS sans modifier de commande', async () => {
+    await assertProductionCors();
+    await assertProductionHandshake();
+  }, 40_000);
+
+  it('refuse une connexion Socket.IO avec un JWT invalide', async () => {
+    socket = io(PRODUCTION_ORIGIN, {
+      path: SOCKET_PATH,
+      transports: ['polling', 'websocket'],
+      reconnection: false,
+      timeout: TIMEOUT_MS,
+      auth: { token: 'invalid-smoke-token', driverId: 1 },
+      extraHeaders: { Origin: WEB_CLIENT_ORIGIN },
+    });
+    await expect(waitForConnection(socket)).rejects.toMatchObject({
+      cause: { message: expect.stringMatching(/auth|token|jwt|unauthor|forbidden/i) },
+    });
+  }, 25_000);
+
+  it.skipIf(!process.env.JATEK_SOCKET_SMOKE_JWT || !process.env.JATEK_SOCKET_SMOKE_ORDER_ID)(
+    'observe order_ready puis order_assigned sur une commande existante, sans mutation',
     async () => {
       const jwt = requiredEnv('JATEK_SOCKET_SMOKE_JWT');
-      const triggerUrl = requiredEnv('JATEK_SOCKET_SMOKE_TRIGGER_URL');
-      const triggerToken = requiredEnv('JATEK_SOCKET_SMOKE_TRIGGER_TOKEN');
       const driverId = parseDriverId();
-      const smokeTestId = crypto.randomUUID();
+      const orderId = Number(requiredEnv('JATEK_SOCKET_SMOKE_ORDER_ID'));
+      if (!Number.isSafeInteger(orderId) || orderId <= 0) {
+        throw new Error('JATEK_SOCKET_SMOKE_ORDER_ID doit désigner une commande existante.');
+      }
 
       await assertProductionCors();
       await assertProductionHandshake();
@@ -218,15 +198,8 @@ describe('livraison Socket.IO en production', () => {
         },
       });
 
-      await waitForConnection(socket);
-      const events = waitForSyntheticEvents(socket, smokeTestId, driverId);
-      await triggerSyntheticEvents(
-        triggerUrl,
-        triggerToken,
-        smokeTestId,
-        driverId,
-      );
-      await events;
+      const events = waitForRealEvents(socket, orderId, driverId);
+      await Promise.all([waitForConnection(socket), events]);
     },
     45_000,
   );

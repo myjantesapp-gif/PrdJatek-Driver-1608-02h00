@@ -8,7 +8,7 @@ import {
 } from 'socket.io-client';
 import { api, getApiBaseUrl, loadAuth } from '@/lib/api';
 
-export type JatekSocketEventName = 'order_ready' | 'order_assigned';
+export type JatekSocketEventName = 'order_available' | 'order_ready' | 'order_assigned';
 
 export type JatekSocketEvent = {
   name: JatekSocketEventName;
@@ -29,8 +29,6 @@ export interface UseJatekSocketOptions {
   driverId?: number | null;
   /** Current JWT. The hook falls back to the restored API session when absent. */
   token?: string | null;
-  /** Socket.IO server origin. Defaults to the Jatek API origin. */
-  url?: string;
   /** Socket.IO path used by the Jatek backend. */
   path?: string;
   /** Optional channel metadata for compatible backend implementations. */
@@ -92,12 +90,13 @@ export function useJatekSocket({
   enabled = true,
   driverId = null,
   token = null,
-  url = getApiBaseUrl(),
   path = '/socket.io/',
   channels = [],
   onEvent,
   onAuthError,
 }: UseJatekSocketOptions = {}): UseJatekSocketResult {
+  // Business events must use the same exclusive remote origin as REST.
+  const url = getApiBaseUrl();
   const [socket, setSocket] = useState<Socket | null>(null);
   const [status, setStatus] = useState<SocketConnectionState>('disconnected');
   const [error, setError] = useState<string | null>(null);
@@ -127,6 +126,8 @@ export function useJatekSocket({
     let disposed = false;
     let currentSocket: Socket | null = null;
     let appStateSubscription: { remove: () => void } | undefined;
+    let serverDisconnectRetryTimer: ReturnType<typeof setTimeout> | null = null;
+    let serverDisconnectRetryCount = 0;
 
     const connectWithToken = async () => {
       const storedAuth = await loadAuth().catch(() => null);
@@ -179,8 +180,29 @@ export function useJatekSocket({
         };
       };
 
+      const scheduleServerDisconnectReconnect = () => {
+        if (disposed || serverDisconnectRetryTimer) return;
+        const delay = Math.min(
+          RECONNECT_DELAY_MS * 2 ** serverDisconnectRetryCount,
+          RECONNECT_DELAY_MAX_MS,
+        );
+        serverDisconnectRetryCount += 1;
+        serverDisconnectRetryTimer = setTimeout(() => {
+          serverDisconnectRetryTimer = null;
+          if (disposed) return;
+          refreshAuth();
+          setStatus('connecting');
+          nextSocket.connect();
+        }, delay);
+      };
+
       nextSocket.on('connect', () => {
         if (disposed) return;
+        if (serverDisconnectRetryTimer) {
+          clearTimeout(serverDisconnectRetryTimer);
+          serverDisconnectRetryTimer = null;
+        }
+        serverDisconnectRetryCount = 0;
         setError(null);
         setReconnectAttempts(0);
         setStatus('connected');
@@ -190,6 +212,12 @@ export function useJatekSocket({
         if (disposed) return;
         setStatus('disconnected');
         setError(reason === 'io server disconnect' ? 'Serveur déconnecté.' : null);
+        // Socket.IO deliberately does not reconnect after a server-initiated
+        // namespace disconnect. Retry with backoff; transport/network drops
+        // continue to use the manager's built-in reconnection.
+        if (reason === 'io server disconnect') {
+          scheduleServerDisconnectReconnect();
+        }
       });
 
       nextSocket.on('connect_error', (connectError: SocketError) => {
@@ -208,7 +236,7 @@ export function useJatekSocket({
 
       nextSocket.onAny((name, data) => {
         if (disposed) return;
-        if (name !== 'order_ready' && name !== 'order_assigned') return;
+        if (name !== 'order_available' && name !== 'order_ready' && name !== 'order_assigned') return;
         const eventName = name as JatekSocketEventName;
         onEventRef.current?.({
           name: eventName,
@@ -244,6 +272,11 @@ export function useJatekSocket({
 
       reconnectRef.current = () => {
         if (disposed) return;
+        if (serverDisconnectRetryTimer) {
+          clearTimeout(serverDisconnectRetryTimer);
+          serverDisconnectRetryTimer = null;
+        }
+        serverDisconnectRetryCount = 0;
         refreshAuth();
         setError(null);
         setStatus('connecting');
@@ -257,6 +290,10 @@ export function useJatekSocket({
 
     return () => {
       disposed = true;
+      if (serverDisconnectRetryTimer) {
+        clearTimeout(serverDisconnectRetryTimer);
+        serverDisconnectRetryTimer = null;
+      }
       appStateSubscription?.remove();
       reconnectRef.current = null;
       currentSocket?.removeAllListeners();

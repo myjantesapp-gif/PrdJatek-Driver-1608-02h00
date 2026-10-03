@@ -1,6 +1,7 @@
+import { formatMAD } from '@/lib/money';
+import { formatRemoteNumber } from '@/lib/driver-metrics';
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import { DriverEarnings, DriverStats } from '@/context/DriverContext';
 
@@ -16,22 +17,22 @@ export function EarningsCard({ earnings, stats }: EarningsCardProps) {
         <Text style={styles.label}>Revenus aujourd'hui</Text>
       </View>
 
-      <Text style={styles.amount}>{earnings.today.toFixed(2)} €</Text>
+      <Text style={styles.amount}>{formatMAD(earnings.today)}</Text>
 
       <View style={styles.statsRow}>
         <View style={styles.statCol}>
-          <Text style={styles.statValue}>{stats.deliveriesToday}</Text>
+          <Text style={styles.statValue}>{formatRemoteNumber(stats.deliveriesToday)}</Text>
           <Text style={styles.statLabel}>Livraisons</Text>
         </View>
         <View style={styles.divider} />
         <View style={styles.statCol}>
-          <Text style={styles.statValue}>{stats.deliveriesTotal}</Text>
+          <Text style={styles.statValue}>{formatRemoteNumber(stats.deliveriesTotal)}</Text>
           <Text style={styles.statLabel}>Total</Text>
         </View>
         <View style={styles.divider} />
         <View style={styles.statCol}>
           <Text style={[styles.statValue, styles.ratingValue]}>
-            {stats.rating.toFixed(2)}
+            {formatRemoteNumber(stats.rating, 2)}
           </Text>
           <Text style={styles.statLabel}>Note</Text>
         </View>
@@ -40,11 +41,11 @@ export function EarningsCard({ earnings, stats }: EarningsCardProps) {
       <View style={styles.weekRow}>
         <View style={styles.weekItem}>
           <Text style={styles.weekLabel}>Cette semaine</Text>
-          <Text style={styles.weekAmount}>{earnings.week.toFixed(2)} €</Text>
+          <Text style={styles.weekAmount}>{formatMAD(earnings.week)}</Text>
         </View>
         <View style={styles.weekItem}>
           <Text style={styles.weekLabel}>Ce mois</Text>
-          <Text style={styles.weekAmount}>{earnings.month.toFixed(2)} €</Text>
+          <Text style={styles.weekAmount}>{formatMAD(earnings.month)}</Text>
         </View>
       </View>
     </View>
@@ -53,11 +54,11 @@ export function EarningsCard({ earnings, stats }: EarningsCardProps) {
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: Colors.card,
+    backgroundColor: Colors.text,
     borderRadius: Colors.radiusLg,
     padding: 20,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: Colors.text,
     overflow: 'hidden',
   },
   header: {
@@ -67,7 +68,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   label: {
-    color: Colors.textMuted,
+    color: '#C5D8D5',
     fontSize: 13,
     fontWeight: '500',
     textTransform: 'uppercase',
@@ -90,17 +91,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   amount: {
-    color: Colors.text,
-    fontSize: 42,
-    fontWeight: '800',
-    marginBottom: 20,
+    color: Colors.card,
+    fontSize: 38,
+    fontFamily: 'Poppins_700Bold',
+    marginBottom: 19,
     letterSpacing: -1,
   },
   statsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: Colors.surface,
+    backgroundColor: 'rgba(255,253,249,0.12)',
     borderRadius: Colors.radiusSm,
     padding: 14,
     marginBottom: 14,
@@ -110,23 +111,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   statValue: {
-    color: Colors.text,
+    color: Colors.card,
     fontSize: 18,
     fontWeight: '800',
     marginBottom: 2,
   },
   ratingValue: {
-    color: Colors.secondary,
+    color: Colors.secondaryLight,
   },
   statLabel: {
-    color: Colors.textMuted,
+    color: '#C5D8D5',
     fontSize: 11,
     fontWeight: '500',
   },
   divider: {
     width: 1,
     height: 32,
-    backgroundColor: Colors.border,
+    backgroundColor: 'rgba(255,253,249,0.2)',
   },
   weekRow: {
     flexDirection: 'row',
@@ -134,18 +135,18 @@ const styles = StyleSheet.create({
   },
   weekItem: {
     flex: 1,
-    backgroundColor: Colors.surface,
+    backgroundColor: 'rgba(255,253,249,0.12)',
     borderRadius: Colors.radiusSm,
     padding: 12,
   },
   weekLabel: {
-    color: Colors.textMuted,
+    color: '#C5D8D5',
     fontSize: 11,
     fontWeight: '500',
     marginBottom: 4,
   },
   weekAmount: {
-    color: Colors.tertiary,
+    color: Colors.tertiaryLight,
     fontSize: 16,
     fontWeight: '700',
   },

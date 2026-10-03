@@ -1,3 +1,4 @@
+import { formatMAD } from '@/lib/money';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -21,14 +22,16 @@ import {
   getNavigationUrls,
   getNextDeliveryStatus,
   getNextOrderStatusLabel,
+  canConfirmDelivery,
 } from '@/lib/delivery-state';
 
 const STEPS = [
   { key: 'accepted', label: 'Commande acceptée', icon: 'checkmark-circle-outline' as const },
   { key: 'at_restaurant', label: 'Au restaurant', icon: 'storefront-outline' as const },
   { key: 'picked_up', label: 'Commande récupérée', icon: 'bag-check-outline' as const },
-  { key: 'delivering', label: 'En livraison', icon: 'bicycle-outline' as const },
-  { key: 'completed', label: 'Livré — OTP requis', icon: 'lock-closed-outline' as const },
+  { key: 'en_route', label: 'En route vers le client', icon: 'bicycle-outline' as const },
+  { key: 'delivering', label: 'Chez le client — code requis', icon: 'location-outline' as const },
+  { key: 'completed', label: 'Livraison confirmée', icon: 'checkmark-done-outline' as const },
 ];
 
 function StepProgress({ currentStatus }: { currentStatus: string }) {
@@ -49,12 +52,12 @@ function StepProgress({ currentStatus }: { currentStatus: string }) {
                 ]}
               >
                 {isDone ? (
-                  <Ionicons name="checkmark" size={14} color="#000" />
+                  <Ionicons name="checkmark" size={14} color={Colors.card} />
                 ) : (
                   <Ionicons
                     name={step.icon}
                     size={14}
-                    color={isActive ? '#000' : Colors.textMuted}
+                    color={isActive ? Colors.card : Colors.textMuted}
                   />
                 )}
               </View>
@@ -214,9 +217,8 @@ export default function OrderDetailScreen() {
     }
   };
 
-  const isDelivering = order.status === 'delivering';
+  const isDelivering = canConfirmDelivery(order.status);
   const totalItems = order.items.reduce((s, i) => s + i.quantity, 0);
-  const subtotal = order.items.reduce((s, i) => s + i.price * i.quantity, 0);
 
   const nextLabel = getNextOrderStatusLabel(order.status);
 
@@ -228,7 +230,7 @@ export default function OrderDetailScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{order.reference}</Text>
         <View style={styles.earningsBadge}>
-          <Text style={styles.earningsText}>{order.earnings.toFixed(2)} €</Text>
+          <Text style={styles.earningsText}>{formatMAD(order.earnings)}</Text>
         </View>
       </View>
 
@@ -296,22 +298,22 @@ export default function OrderDetailScreen() {
                 <Text style={styles.itemQty}>{item.quantity}</Text>
               </View>
               <Text style={styles.itemName}>{item.name}</Text>
-              <Text style={styles.itemPrice}>{(item.price * item.quantity).toFixed(2)} €</Text>
+              <Text style={styles.itemPrice}>{formatMAD(item.price * item.quantity)}</Text>
             </View>
           ))}
           <View style={styles.subtotalRow}>
-            <Text style={styles.subtotalLabel}>Sous-total</Text>
-            <Text style={styles.subtotalValue}>{subtotal.toFixed(2)} €</Text>
+            <Text style={styles.subtotalLabel}>Total commande</Text>
+            <Text style={styles.subtotalValue}>{formatMAD(order.total)}</Text>
           </View>
           {order.tip > 0 && (
             <View style={styles.subtotalRow}>
               <Text style={styles.subtotalLabel}>Pourboire</Text>
-              <Text style={[styles.subtotalValue, { color: Colors.success }]}>+{order.tip.toFixed(2)} €</Text>
+              <Text style={[styles.subtotalValue, { color: Colors.success }]}>+{formatMAD(order.tip)}</Text>
             </View>
           )}
         </View>
 
-        {isDelivering && !otpSuccess && (
+        {isDelivering && !otpSuccess && !advancing && (
           <View style={styles.otpSection}>
             <View style={styles.otpHeader}>
               <Ionicons name="lock-closed" size={22} color={Colors.primary} />
@@ -322,7 +324,7 @@ export default function OrderDetailScreen() {
             </Text>
             <OTPInput key={otpKey} length={4} onComplete={handleOTP} error={otpError} />
             {otpError && (
-              <Text style={styles.otpError}>Code incorrect. Vérifiez avec le client.</Text>
+              <Text style={styles.otpError}>Livraison non confirmée. Consultez le message et réessayez.</Text>
             )}
           </View>
         )}
@@ -331,7 +333,7 @@ export default function OrderDetailScreen() {
           <View style={styles.successBox}>
             <Ionicons name="checkmark-circle" size={40} color={Colors.success} />
             <Text style={styles.successTitle}>Livraison confirmée !</Text>
-            <Text style={styles.successSub}>+{order.earnings.toFixed(2)} € ajoutés</Text>
+            <Text style={styles.successSub}>Livraison enregistrée — {formatMAD(order.earnings)}</Text>
           </View>
         )}
 
@@ -353,11 +355,11 @@ export default function OrderDetailScreen() {
             activeOpacity={0.85}
           >
             {advancing ? (
-              <ActivityIndicator size="small" color="#000" />
+              <ActivityIndicator size="small" color={Colors.card} />
             ) : (
               <>
                 <Text style={styles.advanceBtnText}>{nextLabel}</Text>
-                <Ionicons name="arrow-forward" size={18} color="#000" />
+                <Ionicons name="arrow-forward" size={18} color={Colors.card} />
               </>
             )}
           </TouchableOpacity>
@@ -515,7 +517,7 @@ const styles = StyleSheet.create({
     borderRadius: Colors.radiusSm,
     borderWidth: 1.5,
     borderColor: Colors.primary + '40',
-    backgroundColor: 'rgba(233,30,140,0.06)',
+    backgroundColor: '#FCE4EF',
   },
   contactBtnText: {
     color: Colors.primary,
@@ -659,7 +661,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   advanceBtnText: {
-    color: '#000',
+    color: Colors.card,
     fontSize: 16,
     fontFamily: 'Poppins_700Bold',
   },

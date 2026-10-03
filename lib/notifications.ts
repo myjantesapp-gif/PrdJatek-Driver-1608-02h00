@@ -1,3 +1,4 @@
+import { formatMAD } from './money';
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
@@ -98,7 +99,7 @@ export async function notifyNewOrder(order: {
     content: {
       title: 'Nouvelle commande disponible',
       body: order.restaurantName
-        ? `${order.restaurantName}${order.earnings ? ` · ${order.earnings.toFixed(2)} €` : ''}`
+        ? `${order.restaurantName}${order.earnings != null ? ` · ${formatMAD(order.earnings)}` : ''}`
         : 'Une nouvelle commande vous attend.',
       sound: 'default',
       ...(Platform.OS === 'android' ? { channelId: ORDERS_NOTIFICATION_CHANNEL_ID } : {}),

@@ -9,6 +9,7 @@ import {
   ApiAvailableOrder,
   ApiEarnings,
   ApiError,
+  getDeliveryConfirmationErrorMessage,
   isDriverBusyConflict,
   saveActiveOrderSnapshot,
   loadActiveOrderSnapshot,
@@ -24,13 +25,16 @@ import {
   getLastNotificationResponse,
 } from '@/lib/notifications';
 import { useAuth } from '@/context/AuthContext';
+import { readRemoteAmount } from '@/lib/money';
 import {
   ACTIVE_STATUS_ORDER,
   isReadyForPickupStatus,
+  isDriverOfferStatus,
   isAllowedStatusTransition,
   mapApiStatus,
+  mapAppStatusToApi,
+  canConfirmDelivery,
   shouldRetainActiveDelivery,
-  shouldRollbackOptimisticStatus,
   type DeliveryStatus,
 } from '@/lib/delivery-state';
 
@@ -95,6 +99,7 @@ export interface Order {
   };
   items: OrderItem[];
   earnings: number;
+  total?: number;
   distance: number;
   estimatedPickup: number;
   estimatedDelivery: number;
@@ -108,21 +113,6 @@ export interface Order {
 export interface DeliveryHistory extends Order {
   rating?: number;
   completedAt: string;
-}
-
-// Map app status → API status
-function mapAppStatusToApi(appStatus: Order['status']): string {
-  switch (appStatus) {
-    case 'accepted':      return 'accepted';
-    case 'at_restaurant': return 'at_restaurant';
-    case 'picked_up':     return 'picked_up';
-    // The app calls this visual state "delivering"; the driver API calls the
-    // first transition after pickup "en_route".
-    case 'delivering':    return 'en_route';
-    case 'completed':     return 'delivered';
-    case 'cancelled':     return 'cancelled';
-    default:              return appStatus;
-  }
 }
 
 function isValidApiOrderResponse(value: unknown, expectedId: number) {
@@ -182,8 +172,10 @@ function mergeOrderWithServer(local: Order, server: Order): Order {
       lng: server.customer.lng || local.customer.lng,
     },
     items: server.items.length > 0 ? server.items : local.items,
+    earnings: Number.isFinite(server.earnings) ? server.earnings : local.earnings,
     createdAt: server.createdAt || local.createdAt,
     otp: server.otp || local.otp,
+    total: server.total ?? local.total,
   };
 }
 
@@ -194,9 +186,9 @@ function mapAvailableOrder(order: ApiAvailableOrder): Order {
   const items: OrderItem[] = rawItems.map((i) => ({
     name: i.menuItemName ?? i.name ?? '',
     quantity: i.quantity,
-    price: Number(i.unitPrice ?? i.price) || 0,
+    price: readRemoteAmount(i.unitPrice ?? i.price),
   }));
-  const deliveryFee = Number(order.deliveryFee) || 0;
+  const deliveryFee = readRemoteAmount(order.deliveryFee);
 
   return {
     id: String(order.id),
@@ -218,7 +210,7 @@ function mapAvailableOrder(order: ApiAvailableOrder): Order {
     },
     items,
     earnings: deliveryFee,
-    distance: 0,
+    distance: Math.max(0, Number(order.distanceToPickupKm) || 0),
     estimatedPickup: 0,
     estimatedDelivery: order.estimatedDeliveryTime ?? 0,
     // The customer OTP is generated/returned when the order is accepted.
@@ -239,14 +231,14 @@ function mapApiOrder(apiOrder: ApiOrder, driverId: number): Order {
   const items: OrderItem[] = rawItems.map((i) => ({
     name: i.name ?? i.menuItemName ?? '',
     quantity: i.quantity,
-    price: Number(i.price ?? i.unitPrice) || 0,
+    price: readRemoteAmount(i.price ?? i.unitPrice),
   }));
 
-  const tip = Number(apiOrder.tip) || 0;
-  const deliveryFee = Number(apiOrder.deliveryFee) || 0;
+  const tip = apiOrder.tip == null ? 0 : readRemoteAmount(apiOrder.tip);
+  const deliveryFee = readRemoteAmount(apiOrder.deliveryFee);
   const earnings = deliveryFee + tip;
 
-  const distance = Number(apiOrder.distance) || 0;
+  const distance = Math.max(0, Number(apiOrder.distanceToPickupKm ?? apiOrder.distance) || 0);
 
   // Fall back to 'incoming' for unmapped statuses so the order is not dropped
   const mappedStatus = mapApiStatus(apiOrder.status) ?? 'incoming';
@@ -271,6 +263,7 @@ function mapApiOrder(apiOrder: ApiOrder, driverId: number): Order {
     },
     items,
     earnings,
+    total: apiOrder.total == null ? undefined : Number(apiOrder.total),
     distance,
     estimatedPickup: apiOrder.estimatedPickupTime ?? 0,
     estimatedDelivery: apiOrder.estimatedDeliveryTime ?? 0,
@@ -301,7 +294,10 @@ interface DriverContextType {
   isSocketConnected: boolean;
   lastSyncAt: Date | null;
   pushNotificationStatus: PushNotificationStatus;
-  refreshEarnings: () => void;
+  refreshEarnings: () => Promise<void>;
+  metricsRefreshing: boolean;
+  metricsSyncError: string | null;
+  metricsLastSyncAt: Date | null;
   refreshProfile: () => Promise<void>;
 }
 
@@ -313,6 +309,8 @@ const DriverContext = createContext<DriverContextType | null>(null);
  */
 const FALLBACK_POLL_MS = 3_000;
 const DRIVER_LOCATION_POLL_MS = 10_000;
+const DRIVER_HEARTBEAT_INTERVAL_MS = 30_000;
+const METRICS_SYNC_INTERVAL_MS = 30_000;
 
 type DriverCoordinates = {
   latitude: number;
@@ -328,11 +326,15 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
   const [terminalOrder, setTerminalOrder] = useState<Order | null>(null);
   const [history, setHistory] = useState<DeliveryHistory[]>([]);
-  const [earnings, setEarnings] = useState<DriverEarnings>({ today: 0, week: 0, month: 0 });
+  const [earnings, setEarnings] = useState<DriverEarnings>({ today: NaN, week: NaN, month: NaN });
+  const [metricsRefreshing, setMetricsRefreshing] = useState(false);
+  const [metricsSyncError, setMetricsSyncError] = useState<string | null>(null);
+  const [metricsLastSyncAt, setMetricsLastSyncAt] = useState<Date | null>(null);
+  const metricsRequestRef = useRef<{ epoch: number; promise: Promise<void> } | null>(null);
   const [stats, setStats] = useState<DriverStats>({
-    deliveriesToday: 0,
-    deliveriesTotal: 0,
-    rating: 0,
+    deliveriesToday: NaN,
+    deliveriesTotal: NaN,
+    rating: NaN,
   });
   const [profile, setProfile] = useState<DriverProfile>({
     id: user ? String(user.driverId) : 'DRV',
@@ -347,7 +349,12 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     useState<PushNotificationStatus>('unknown');
   const statusRef = useRef<DriverStatus>(status);
   const activeOrderHydratedRef = useRef(false);
+  const driverSessionEpochRef = useRef(0);
   const profileAvailabilityRef = useRef<boolean | null>(null);
+  const profileRequestVersionRef = useRef(0);
+  const profileIncompleteRef = useRef(false);
+  /** A successful profile/assigned-order request must not hide failed offers. */
+  const offerRequestFailureRef = useRef<string | null>(null);
 
   const seenOrderIds = useRef<Set<number>>(new Set());
   const pendingQueueRef = useRef<number[]>([]); // IDs of pending orders not yet shown
@@ -370,8 +377,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const acceptingOrderIdRef = useRef<number | null>(null);
   /** Prevent duplicate in-flight status transitions */
   const isUpdatingStatusRef = useRef(false);
-  const statusUpdateVersionRef = useRef(0);
-  const latestStatusUpdateRef = useRef<{ orderId: string; version: number } | null>(null);
   const confirmedActiveStatusRef = useRef<{ orderId: string; status: Order['status'] } | null>(null);
   /** Prevent repeated alerts when an older client or backend creates duplicate active deliveries. */
   const multipleActiveOrdersAlertedRef = useRef(false);
@@ -440,6 +445,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   // Reset seen-order tracking whenever the driver identity changes (login/logout)
   useEffect(() => {
     let cancelled = false;
+    driverSessionEpochRef.current += 1;
     activeOrderHydratedRef.current = false;
     seenOrderIds.current.clear();
     pendingQueueRef.current = [];
@@ -449,9 +455,29 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     driverLocationRef.current = null;
     locationPermissionRef.current = 'unknown';
     confirmedActiveStatusRef.current = null;
-    latestStatusUpdateRef.current = null;
     acceptingOrderIdRef.current = null;
     profileAvailabilityRef.current = null;
+    profileIncompleteRef.current = false;
+    offerRequestFailureRef.current = null;
+    // These are server-response caches, not a local order database. Never carry
+    // another account's offers/history into an offline or failed sync.
+    lastOrdersRef.current = [];
+    lastAvailableOrdersRef.current = [];
+    incomingOrderRef.current = null;
+    if (incomingTimerRef.current) {
+      clearTimeout(incomingTimerRef.current);
+      incomingTimerRef.current = null;
+    }
+    setIncomingOrder(null);
+    setHistory([]);
+    setEarnings({ today: NaN, week: NaN, month: NaN });
+    setStats({ deliveriesToday: NaN, deliveriesTotal: NaN, rating: NaN });
+    metricsRequestRef.current = null;
+    setMetricsRefreshing(false);
+    setMetricsSyncError(null);
+    setMetricsLastSyncAt(null);
+    setIsApiConnected(false);
+    setLastSyncAt(null);
 
     activeOrderRef.current = null;
     pendingNotificationResponseRef.current = null;
@@ -485,7 +511,6 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           try {
             const remoteOrder = await api.getOrder(savedOrder.apiId);
             const remoteStatus = mapApiStatus(remoteOrder.status);
-            const hasOwnershipFields = hasConcreteDriverOwnership(remoteOrder);
             const belongsToDriver =
               sameDriverId(remoteOrder.driverId, driverId) ||
               sameDriverId(remoteOrder.assignedDriverId, driverId);
@@ -493,7 +518,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
               remoteStatus !== null && ACTIVE_STATUS_ORDER.includes(remoteStatus);
             if (
               !isValidApiOrderResponse(remoteOrder, savedOrder.apiId) ||
-              (hasOwnershipFields && !belongsToDriver) ||
+              !belongsToDriver ||
               !isRemoteActive
             ) {
               await clearActiveOrderSnapshot(driverId);
@@ -553,10 +578,14 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
   const refreshProfile = useCallback(async () => {
     if (!driverId) return;
+    const epoch = driverSessionEpochRef.current;
+    const version = ++profileRequestVersionRef.current;
     try {
       // /me is authoritative for the authenticated session. It also avoids
       // keeping a stale driverId from a previous login in sync.
       const d: ApiDriverProfile = await api.getCurrentDriver();
+      if (epoch !== driverSessionEpochRef.current || version !== profileRequestVersionRef.current) return;
+      if (Number(d.id) !== driverId) throw new Error('Le profil reçu ne correspond pas au livreur connecté.');
       setProfile({
         id: String(d.id),
         name: d.name,
@@ -567,9 +596,14 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       });
       setStats((prev) => ({
         ...prev,
-        rating: Number(d.rating) || 0,
+        rating: readRemoteAmount(d.rating),
       }));
-      profileAvailabilityRef.current = d.isAvailable;
+      // A completed profile is required by the remote offers endpoint. An
+      // explicitly null timestamp must not appear as "online, no orders".
+      // Older contracts omit this field; do not invent a restriction then.
+      const wasIncomplete = profileIncompleteRef.current;
+      profileIncompleteRef.current = d.profileCompletedAt === null;
+      profileAvailabilityRef.current = d.isAvailable && !profileIncompleteRef.current;
       // Profile availability is not authoritative while a delivery is active.
       // The backend may briefly report the driver as available while the
       // assigned-order list is catching up.
@@ -577,16 +611,74 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         statusRef.current = 'busy';
         setStatusState('busy');
       } else if (activeOrderHydratedRef.current) {
-        const nextStatus = d.isAvailable ? 'online' : 'offline';
+        const nextStatus = profileAvailabilityRef.current ? 'online' : 'offline';
         statusRef.current = nextStatus;
         setStatusState(nextStatus);
       }
-      setIsApiConnected(true);
+      if (profileIncompleteRef.current && d.isAvailable && !wasIncomplete && !activeOrderRef.current) {
+        Alert.alert(
+          'Profil à compléter',
+          'Le serveur ne propose aucune commande tant que votre profil livreur n’est pas complété.',
+          [{ text: 'Compléter mon profil', onPress: () => router.push('/complete-profile') }],
+        );
+      }
+      setIsApiConnected(offerRequestFailureRef.current === null);
     } catch (err) {
+      if (epoch !== driverSessionEpochRef.current || version !== profileRequestVersionRef.current) return;
       console.warn('[DriverContext] loadProfile failed:', err);
       setIsApiConnected(false);
+      throw err;
     }
   }, [driverId]);
+
+  const refreshEarnings = useCallback((): Promise<void> => {
+    if (!driverId) return Promise.resolve();
+    const epoch = driverSessionEpochRef.current;
+    if (metricsRequestRef.current?.epoch === epoch) return metricsRequestRef.current.promise;
+    setMetricsRefreshing(true);
+    const promise = (async () => {
+      try {
+        const [remote] = await Promise.all([api.getEarnings(driverId), refreshProfile()]);
+        if (epoch !== driverSessionEpochRef.current) return;
+        const next = {
+          today: readRemoteAmount(remote.today),
+          week: readRemoteAmount(remote.thisWeek),
+          month: readRemoteAmount(remote.thisMonth),
+        };
+        const completedToday = readRemoteAmount(remote.completedToday);
+        const totalDeliveries = readRemoteAmount(remote.totalDeliveries);
+        if (
+          !Object.values(next).every(Number.isFinite) ||
+          !Number.isSafeInteger(completedToday) || completedToday < 0 ||
+          !Number.isSafeInteger(totalDeliveries) || totalDeliveries < 0
+        ) throw new Error('Chiffres incomplets ou invalides reçus de l’API distante.');
+        setEarnings(next);
+        setStats(previous => ({ ...previous, deliveriesToday: completedToday, deliveriesTotal: totalDeliveries }));
+        setMetricsLastSyncAt(new Date());
+        setMetricsSyncError(null);
+      } catch (error) {
+        if (epoch !== driverSessionEpochRef.current) return;
+        setMetricsSyncError(error instanceof Error ? error.message : 'Synchronisation des chiffres impossible.');
+        console.warn('[DriverContext] metrics synchronization failed:', error);
+      } finally {
+        if (epoch === driverSessionEpochRef.current) {
+          setMetricsRefreshing(false);
+          metricsRequestRef.current = null;
+        }
+      }
+    })();
+    metricsRequestRef.current = { epoch, promise };
+    return promise;
+  }, [driverId, refreshProfile]);
+
+  useEffect(() => {
+    if (!driverId) return;
+    void refreshEarnings();
+    const interval = setInterval(() => {
+      if (!AppState.currentState || AppState.currentState === 'active') void refreshEarnings();
+    }, METRICS_SYNC_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [driverId, refreshEarnings]);
 
   useEffect(() => {
     if (!driverId) return;
@@ -628,27 +720,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
     void setupPushNotifications();
 
-    const loadEarnings = async () => {
-      try {
-        const e: ApiEarnings = await api.getEarnings(driverId);
-        setEarnings({
-          today: Number(e.today) || 0,
-          week: Number(e.thisWeek) || 0,
-          month: Number(e.thisMonth) || 0,
-        });
-        setStats((prev) => ({
-          ...prev,
-          deliveriesToday: e.completedToday,
-          deliveriesTotal: e.totalDeliveries,
-        }));
-      } catch (err) {
-        console.warn('[DriverContext] loadEarnings failed:', err);
-      }
-    };
-
-    refreshProfile();
-    loadEarnings();
-  }, [driverId, refreshProfile]);
+  }, [driverId]);
 
   // ── Wire notification tap → navigate to active order ────────────────────────
 
@@ -699,6 +771,14 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     if (activeOrderRef.current && s !== 'busy') {
       statusRef.current = 'busy';
       setStatusState('busy');
+      return;
+    }
+    if (s === 'online' && profileIncompleteRef.current) {
+      Alert.alert(
+        'Profil à compléter',
+        'Complétez votre profil livreur pour recevoir les commandes.',
+        [{ text: 'Compléter mon profil', onPress: () => router.push('/complete-profile') }],
+      );
       return;
     }
     const version = ++statusVersionRef.current;
@@ -800,13 +880,15 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
     syncLocation();
     locationIntervalRef.current = setInterval(syncLocation, DRIVER_LOCATION_POLL_MS);
-    const heartbeatInterval = setInterval(() => {
+    const sendHeartbeat = () => {
       if (!cancelled) {
         api.heartbeat(driverId).catch((err) => {
           console.warn('[DriverContext] driver heartbeat failed:', err);
         });
       }
-    }, 25_000);
+    };
+    sendHeartbeat();
+    const heartbeatInterval = setInterval(sendHeartbeat, DRIVER_HEARTBEAT_INTERVAL_MS);
 
     return () => {
       cancelled = true;
@@ -899,9 +981,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       if (cachedEnriched) {
         setIncomingOrder(cachedEnriched);
       } else if (driverId) {
+        const sessionEpoch = driverSessionEpochRef.current;
         api.getOrder(order.apiId).then((full) => {
+          if (sessionEpoch !== driverSessionEpochRef.current) return;
           const fullStatusIsReady =
-            isReadyForPickupStatus(full.status) ||
+            isDriverOfferStatus(full.status) ||
             mapApiStatus(full.status) === 'incoming';
           const hasOwnershipFields = hasConcreteDriverOwnership(full);
           const belongsToDriver =
@@ -910,7 +994,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           const belongsToAnotherDriver = hasOwnershipFields && !belongsToDriver;
           if (fullStatusIsReady && !belongsToAnotherDriver) {
             const enriched = mapApiOrder(full, driverId);
-            const withIncoming = { ...enriched, status: 'incoming' as const };
+            const withIncoming = {
+              ...enriched,
+              distance: enriched.distance || order.distance,
+              status: 'incoming' as const,
+            };
             enrichedOrderCache.current.set(order.apiId, withIncoming);
             // Update the displayed alert if it's still showing this order
             setIncomingOrder((current) =>
@@ -921,6 +1009,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
             advanceQueueRef.current();
           }
         }).catch((err) => {
+          if (sessionEpoch !== driverSessionEpochRef.current) return;
           if (err instanceof ApiError && err.status === 404) {
             discardStaleOffer(order.apiId);
             advanceQueueRef.current();
@@ -956,6 +1045,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     // active synchronization so no stale response can overwrite newer UI, and
     // callers that need reconciliation can wait for it to finish.
     if (pollInFlightRef.current) return pollInFlightRef.current;
+    const sessionEpoch = driverSessionEpochRef.current;
 
     const poll = (async () => {
       try {
@@ -963,12 +1053,16 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       const localActiveOrder = activeOrderRef.current;
       const isOnline = currentStatus === 'online' && !localActiveOrder;
       const [assignedResult, availableResult, detailResult] = await Promise.allSettled([
-        api.getOrders(),
+        // The remote backend requires the driver ownership filter.
+        api.getOrders({ driverId: String(driverId) }),
         isOnline ? api.getAvailableOrders() : Promise.resolve([] as ApiAvailableOrder[]),
         localActiveOrder
           ? api.getOrder(localActiveOrder.apiId)
           : Promise.resolve(null as ApiOrder | null),
       ]);
+      // A request started before logout/account switching cannot restore the
+      // cleared offers or delivery history after the new session starts.
+      if (sessionEpoch !== driverSessionEpochRef.current) return;
 
       const assignedRequestSucceeded = (
         assignedResult.status === 'fulfilled' && Array.isArray(assignedResult.value)
@@ -982,6 +1076,26 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       const availableFromServer: ApiAvailableOrder[] = availableRequestSucceeded
         ? availableResult.value
         : [];
+      if (isOnline && availableResult.status === 'rejected') {
+        const error = availableResult.reason;
+        const message = error instanceof Error
+          ? error.message.slice(0, 240)
+          : 'Impossible de récupérer les offres du serveur.';
+        const failure = error instanceof ApiError
+          ? `${message} (HTTP ${error.status})`
+          : message;
+        if (offerRequestFailureRef.current !== failure) {
+          offerRequestFailureRef.current = failure;
+          if (!(error instanceof ApiError && error.status === 401)) {
+            Alert.alert(
+              'Réception des commandes bloquée',
+              `${failure}\n\nLa connexion au profil ne signifie pas que les offres sont accessibles. L’app réessaie automatiquement.`,
+            );
+          }
+        }
+      } else if (isOnline && availableRequestSucceeded) {
+        offerRequestFailureRef.current = null;
+      }
       // A single failed list request is not an empty list. Keep the last
       // authoritative snapshot so transient network/5xx errors do not erase
       // offers or make an active delivery disappear from the UI.
@@ -1034,7 +1148,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       setLastSyncAt(new Date());
       setIsApiConnected(
         assignedRequestSucceeded &&
-        (!isOnline || availableRequestSucceeded || !localActiveOrder),
+        (!isOnline || availableRequestSucceeded),
       );
 
       if (assignedRequestSucceeded) {
@@ -1147,11 +1261,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
             orderId: localActiveOrder.id,
             status: mapped.status,
           };
-          const apiStatusIdx = ACTIVE_STATUS_ORDER.indexOf(mapped.status);
-          const localStatusIdx = ACTIVE_STATUS_ORDER.indexOf(localActiveOrder.status);
-          nextActiveOrder = localStatusIdx >= apiStatusIdx
-            ? localActiveOrder
-            : mergeOrderWithServer(localActiveOrder, mapped);
+          // Server-confirmed state wins, including after an interrupted request
+          // or when an older client snapshot merged the two travel stages.
+          nextActiveOrder = mergeOrderWithServer(localActiveOrder, mapped);
         }
         activeOrderRef.current = nextActiveOrder;
         setActiveOrder(nextActiveOrder);
@@ -1228,7 +1340,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         const authoritativeIncomingIds = new Set([
           ...pendingAssigned.map((o) => o.id),
           ...available
-            .filter((o) => isReadyForPickupStatus(o.status))
+            .filter((o) => isDriverOfferStatus(o.status))
             .map((o) => o.id),
         ]);
         const allIncoming = [
@@ -1236,9 +1348,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           ...available
             .filter((o) => {
               if (suppressedOfferIds.current.has(o.id)) return false;
-              // The available queue is strictly for orders ready for pickup.
-              // Never surface accepted/in-progress/old records as new offers.
-              return isReadyForPickupStatus(o.status);
+              // The backend also offers shop-accepted/preparing orders.
+              // Still exclude picked-up, delivered and cancelled records.
+              return isDriverOfferStatus(o.status);
             })
             .map((o) => o.id),
         ];
@@ -1273,8 +1385,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
             // Pre-fetch full order details so coordinates are ready when alert shows
             if (!enrichedOrderCache.current.has(id) && driverId) {
               api.getOrder(id).then((full) => {
+                if (sessionEpoch !== driverSessionEpochRef.current) return;
                 const fullStatusIsReady =
-                  isReadyForPickupStatus(full.status) ||
+                  isDriverOfferStatus(full.status) ||
                   mapApiStatus(full.status) === 'incoming';
                 const hasOwnershipFields = hasConcreteDriverOwnership(full);
                 const belongsToDriver =
@@ -1283,16 +1396,23 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
                 const belongsToAnotherDriver = hasOwnershipFields && !belongsToDriver;
                 if (fullStatusIsReady && !belongsToAnotherDriver) {
                   const mapped = mapApiOrder(full, driverId);
-                  enrichedOrderCache.current.set(id, { ...mapped, status: 'incoming' });
+                  const withIncoming = {
+                    ...mapped,
+                    distance: mapped.distance ||
+                      Math.max(0, Number(available.find(order => order.id === id)?.distanceToPickupKm) || 0),
+                    status: 'incoming' as const,
+                  };
+                  enrichedOrderCache.current.set(id, withIncoming);
                   // If this order is currently being displayed, update it live
                   setIncomingOrder((current) =>
-                    current?.apiId === id ? { ...mapped, status: 'incoming' } : current,
+                    current?.apiId === id ? withIncoming : current,
                   );
                 } else if (belongsToAnotherDriver) {
                   discardStaleOffer(id);
                   advanceQueueRef.current();
                 }
               }).catch((err) => {
+                if (sessionEpoch !== driverSessionEpochRef.current) return;
                 if (err instanceof ApiError && err.status === 404) {
                   discardStaleOffer(id);
                   advanceQueueRef.current();
@@ -1313,7 +1433,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       }
       } catch (err) {
         console.warn('[DriverContext] pollOrders failed:', err);
-        setIsApiConnected(false);
+        if (sessionEpoch === driverSessionEpochRef.current) setIsApiConnected(false);
       } finally {
         pollInFlightRef.current = null;
       }
@@ -1373,7 +1493,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
   const handleSocketEvent = useCallback((event: JatekSocketEvent) => {
     const orderId = getSocketOrderId(event);
 
-    if (event.type === 'order_ready') {
+    if (event.type === 'order_available' || event.type === 'order_ready') {
       pollOrdersRef.current();
       return;
     }
@@ -1407,7 +1527,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     }
 
     pollOrdersRef.current();
-  }, [driverId]);
+    void refreshEarnings();
+  }, [driverId, refreshEarnings]);
 
   const handleSocketAuthError = useCallback(() => {
     console.warn('[DriverContext] Socket.IO auth error — token rejected by server, logging out');
@@ -1433,8 +1554,11 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
 
   // A successful reconnect gets one immediate authoritative synchronization.
   useEffect(() => {
-    if (driverId && isSocketConnected) void pollOrdersRef.current();
-  }, [driverId, isSocketConnected]);
+    if (driverId && isSocketConnected) {
+      void pollOrdersRef.current();
+      void refreshEarnings();
+    }
+  }, [driverId, isSocketConnected, refreshEarnings]);
 
   useEffect(() => {
     if (!driverId) return;
@@ -1442,7 +1566,10 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     // Android may pause timers while the app is backgrounded. Reconcile
     // immediately when it becomes active again instead of waiting for polling.
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') pollOrdersRef.current();
+      if (nextState === 'active') {
+        void pollOrdersRef.current();
+        void refreshEarnings();
+      }
     });
 
     pollOrdersRef.current();
@@ -1455,7 +1582,7 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       }
       appStateSubscription.remove();
     };
-  }, [driverId]);
+  }, [driverId, refreshEarnings]);
 
   // ── Order actions ────────────────────────────────────────────────────────────
 
@@ -1641,7 +1768,8 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       suppressedOfferIds.current.add(incomingOrder.apiId);
       incomingOrderRef.current = null;
       enrichedOrderCache.current.delete(incomingOrder.apiId);
-      api.updateOrderStatus(incomingOrder.apiId, 'rejected').catch(() => {});
+      // Declining an unassigned offer is local; the remote driver contract
+      // neither permits "rejected" nor authorizes changing another offer.
     }
     advanceQueueRef.current();
   }, [incomingOrder]);
@@ -1655,6 +1783,44 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     }
     advanceQueueRef.current();
   }, [incomingOrder]);
+
+  // A validated terminal record is sufficient on its own. Never require a
+  // second poll to release the driver after a successful recovery read.
+  const applyTerminalOrder = useCallback(async (previous: Order, remote: ApiOrder): Promise<boolean> => {
+    if (!driverId) return false;
+    const mapped = mapApiOrder(remote, driverId);
+    if (mapped.status !== 'completed' && mapped.status !== 'cancelled') return false;
+    const terminal = mergeOrderWithServer(previous, mapped);
+    if (mapped.status === 'completed') {
+      setHistory((entries) => entries.some(entry => entry.id === terminal.id)
+        ? entries
+        : [{
+          ...terminal,
+          status: 'completed' as const,
+          completedAt: remote.completedAt ?? remote.updatedAt ?? remote.createdAt,
+          rating: remote.rating,
+        }, ...entries]);
+    }
+    // A late response for the previous delivery must not clear a different
+    // active delivery or its account-scoped snapshot.
+    if (!activeOrderRef.current || activeOrderRef.current.id === previous.id) {
+      confirmedActiveStatusRef.current = { orderId: previous.id, status: mapped.status };
+      activeOrderRef.current = null;
+      setActiveOrder(null);
+      setTerminalOrder(terminal);
+      statusRef.current = 'online';
+      setStatusState('online');
+      await queueActiveSnapshotWrite(
+        () => clearActiveOrderSnapshot(driverId),
+        'failed to clear terminal order snapshot',
+      );
+      api.updateDriver(driverId, { isAvailable: true }).catch((error) => {
+        console.warn('[DriverContext] failed to persist availability after terminal order:', error);
+      });
+    }
+    void refreshEarnings();
+    return mapped.status === 'completed';
+  }, [driverId, queueActiveSnapshotWrite, refreshEarnings]);
 
   /**
    * Advance the active order's status. Returns a Promise so callers can await
@@ -1681,6 +1847,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
           throw new Error('La commande active n’est plus attribuée à ce livreur.');
         }
         currentOrder = mapApiOrder(remoteOrder, driverId);
+        if (currentOrder.status === 'completed' || currentOrder.status === 'cancelled') {
+          return await applyTerminalOrder(currentOrder, remoteOrder);
+        }
         activeOrderRef.current = currentOrder;
         setActiveOrder(currentOrder);
         statusRef.current = 'busy';
@@ -1700,23 +1869,23 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
     // Guard against concurrent in-flight transitions.
-    if (isUpdatingStatusRef.current) return false;
+    if (isUpdatingStatusRef.current || isConfirmingDeliveryRef.current) return false;
     isUpdatingStatusRef.current = true;
-    const requestVersion = ++statusUpdateVersionRef.current;
-    latestStatusUpdateRef.current = { orderId: id, version: requestVersion };
+    confirmedActiveStatusRef.current = { orderId: id, status: currentOrder.status };
 
     const previousOrder = currentOrder;
-    const optimisticOrder = { ...previousOrder, status: newStatus };
-    activeOrderRef.current = optimisticOrder;
-    setActiveOrder(optimisticOrder);
+    // Do not expose the following action (especially OTP) until the server
+    // has acknowledged this step.
 
     try {
       const updated = await api.updateOrderStatus(
         orderId,
         mapAppStatusToApi(newStatus),
-        { driverId },
       );
-      if (!isValidApiOrderResponse(updated, orderId)) {
+      if (!isValidApiOrderResponse(updated, orderId) ||
+          (hasConcreteDriverOwnership(updated) &&
+            !sameDriverId(updated.driverId, driverId) &&
+            !sameDriverId(updated.assignedDriverId, driverId))) {
         throw new Error('Réponse de statut invalide du serveur.');
       }
       const mappedUpdated = mapApiOrder(updated, driverId);
@@ -1732,39 +1901,14 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
         mappedUpdated.status === 'cancelled'
       );
       if (isTerminalResponse) {
-        if (mappedUpdated.status === 'completed') {
-          setHistory((previousHistory) => (
-            previousHistory.some((entry) => entry.id === confirmedOrder.id)
-              ? previousHistory
-              : [{
-                ...confirmedOrder,
-                status: 'completed' as const,
-                completedAt: updated.completedAt ?? updated.updatedAt ?? updated.createdAt,
-                rating: updated.rating,
-              }, ...previousHistory]
-          ));
-        }
-        if (activeOrderRef.current?.id === id) {
-          activeOrderRef.current = null;
-          setActiveOrder(null);
-          setTerminalOrder(confirmedOrder);
-          setStatusState('online');
-          statusRef.current = 'online';
-          queueActiveSnapshotWrite(
-            () => clearActiveOrderSnapshot(driverId),
-            'failed to clear terminal order snapshot',
-          );
-          api.updateDriver(driverId, { isAvailable: true }).catch((updateError) => {
-            console.warn('[DriverContext] failed to persist online after terminal status:', updateError);
-          });
-        }
+        const completed = await applyTerminalOrder(previousOrder, updated);
         Alert.alert(
           mappedUpdated.status === 'completed' ? 'Livraison finalisée' : 'Commande annulée',
           mappedUpdated.status === 'completed'
             ? 'Le serveur a déjà confirmé la livraison.'
             : 'Le serveur a annulé cette commande.',
         );
-        return mappedUpdated.status === 'completed';
+        return completed;
       }
       if (activeOrderRef.current?.id === id) {
         confirmedActiveStatusRef.current = { orderId: id, status: mappedUpdated.status };
@@ -1780,27 +1924,42 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       }
       return responseConfirmsTransition;
     } catch (err) {
-      console.warn('[DriverContext] updateOrderStatus API call failed — rolling back:', err);
-      // A timeout can happen after the server applied the transition. Reconcile
-      // once before reverting, then only roll back this request's own optimistic
-      // state if no server confirmation has superseded it.
-      await pollOrdersRef.current();
-      const confirmedStatus = confirmedActiveStatusRef.current;
-      const shouldRollback = shouldRollbackOptimisticStatus({
-        orderId: id,
-        requestVersion,
-        latestRequest: latestStatusUpdateRef.current ?? undefined,
-        activeOrderId: activeOrderRef.current?.id,
-        targetStatus: newStatus,
-        confirmedStatus:
-          confirmedStatus?.orderId === id ? confirmedStatus.status : undefined,
-      });
-      if (shouldRollback) {
-        activeOrderRef.current = previousOrder;
-        setActiveOrder(previousOrder);
-        persistActiveOrderSnapshot(previousOrder);
+      console.warn('[DriverContext] updateOrderStatus API call failed — reconciling:', err);
+      // A timeout/conflict can follow a committed transition. Read this exact
+      // order, not the offer queue, before deciding whether to retry.
+      try {
+        const remote = await api.getOrder(orderId);
+        if (
+          isValidApiOrderResponse(remote, orderId) &&
+          (!hasConcreteDriverOwnership(remote) ||
+            sameDriverId(remote.driverId, driverId) ||
+            sameDriverId(remote.assignedDriverId, driverId))
+        ) {
+          const reconciled = mergeOrderWithServer(previousOrder, mapApiOrder(remote, driverId));
+          if (reconciled.status === 'completed' || reconciled.status === 'cancelled') {
+            const completed = await applyTerminalOrder(previousOrder, remote);
+            Alert.alert(
+              completed ? 'Livraison finalisée' : 'Commande annulée',
+              completed ? 'Le serveur a déjà confirmé la livraison.' : 'Le serveur a annulé cette commande.',
+            );
+            return completed;
+          }
+          confirmedActiveStatusRef.current = { orderId: id, status: reconciled.status };
+          if (ACTIVE_STATUS_ORDER.includes(reconciled.status) && activeOrderRef.current?.id === id) {
+            activeOrderRef.current = reconciled;
+            setActiveOrder(reconciled);
+            persistActiveOrderSnapshot(reconciled);
+          }
+        }
+      } catch (reconcileError) {
+        console.warn('[DriverContext] status reconciliation failed:', reconcileError);
       }
-      if (!shouldRollback && confirmedStatus?.orderId === id) return true;
+      const confirmedStatus = confirmedActiveStatusRef.current;
+      if (
+        confirmedStatus?.orderId === id &&
+        (confirmedStatus.status === 'completed' ||
+          ACTIVE_STATUS_ORDER.indexOf(confirmedStatus.status) >= ACTIVE_STATUS_ORDER.indexOf(newStatus))
+      ) return true;
       const message = err instanceof ApiError
         ? err.message
         : err instanceof Error
@@ -1811,93 +1970,91 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
     } finally {
       isUpdatingStatusRef.current = false;
     }
-  }, [driverId, persistActiveOrderSnapshot]);
+  }, [driverId, persistActiveOrderSnapshot, applyTerminalOrder]);
 
   const validateOTP = useCallback(async (id: string, code: string): Promise<boolean> => {
     const currentOrder = activeOrderRef.current;
-    if (!currentOrder || currentOrder.id !== id || isConfirmingDeliveryRef.current) return false;
-    if (code.length !== 4 || !driverId) return false;
+    if (!currentOrder || currentOrder.id !== id || isConfirmingDeliveryRef.current ||
+        isUpdatingStatusRef.current) return false;
+    if (!/^\d{4}$/.test(code) || !driverId) return false;
+    if (!canConfirmDelivery(currentOrder.status)) {
+      Alert.alert('Étape requise', 'Confirmez votre arrivée chez le client avant de saisir le code.');
+      return false;
+    }
 
     isConfirmingDeliveryRef.current = true;
     const orderToComplete = currentOrder;
+    const sessionEpoch = driverSessionEpochRef.current;
     try {
-      const confirmed = await api.confirmDelivery(orderToComplete.apiId, code);
+      let confirmed: ApiOrder;
+      try {
+        confirmed = await api.confirmDelivery(orderToComplete.apiId, code);
+        if (sessionEpoch !== driverSessionEpochRef.current) return false;
+        if (
+          !isValidApiOrderResponse(confirmed, orderToComplete.apiId) ||
+          mapApiStatus(confirmed.status) !== 'completed'
+        ) {
+          throw new Error('La livraison n’a pas été confirmée par le serveur.');
+        }
+      } catch (confirmationError) {
+        if (sessionEpoch !== driverSessionEpochRef.current) return false;
+        // Never retry a consumed OTP automatically. An interrupted confirmation
+        // or an "already used" response is success only if GET proves delivery.
+        const remote = await api.getOrder(orderToComplete.apiId).catch(() => null);
+        if (sessionEpoch !== driverSessionEpochRef.current) return false;
+        if (
+          remote && isValidApiOrderResponse(remote, orderToComplete.apiId) &&
+          (!hasConcreteDriverOwnership(remote) ||
+            sameDriverId(remote.driverId, driverId) ||
+            sameDriverId(remote.assignedDriverId, driverId))
+        ) {
+          if (mapApiStatus(remote.status) === 'completed') {
+            confirmed = remote;
+          } else {
+            const reconciled = mergeOrderWithServer(orderToComplete, mapApiOrder(remote, driverId));
+            if (ACTIVE_STATUS_ORDER.includes(reconciled.status) &&
+                activeOrderRef.current?.id === id) {
+              activeOrderRef.current = reconciled;
+              setActiveOrder(reconciled);
+              persistActiveOrderSnapshot(reconciled);
+            } else if (reconciled.status === 'cancelled') {
+              await applyTerminalOrder(orderToComplete, remote);
+            }
+            throw confirmationError;
+          }
+        } else {
+          throw confirmationError;
+        }
+      }
       if (
         !isValidApiOrderResponse(confirmed, orderToComplete.apiId) ||
+        (hasConcreteDriverOwnership(confirmed) &&
+          !sameDriverId(confirmed.driverId, driverId) &&
+          !sameDriverId(confirmed.assignedDriverId, driverId)) ||
         mapApiStatus(confirmed.status) !== 'completed'
       ) {
         throw new Error('La livraison n’a pas été confirmée par le serveur.');
       }
 
-      const confirmedOrder = mergeOrderWithServer(
-        orderToComplete,
-        mapApiOrder(confirmed, driverId),
-      );
-      const completed: DeliveryHistory = {
-        ...confirmedOrder,
-        status: 'completed',
-        completedAt: confirmed.completedAt ?? confirmed.updatedAt ?? confirmed.createdAt,
-        rating: confirmed.rating,
-      };
-
-      setHistory((prev) => (
-        prev.some((entry) => entry.id === completed.id) ? prev : [completed, ...prev]
-      ));
-      setTerminalOrder(completed);
-      activeOrderRef.current = null;
-      setActiveOrder((prev) => (
-        prev?.apiId === orderToComplete.apiId ? null : prev
-      ));
-      setStatusState('online');
-      statusRef.current = 'online';
-      await queueActiveSnapshotWrite(
-        () => clearActiveOrderSnapshot(driverId),
-        'failed to clear completed order snapshot',
-      );
-
-      // Persist online status to backend so driver can receive new orders
-      api.updateDriver(driverId, { isAvailable: true }).catch((err) => {
-        console.warn('[DriverContext] failed to persist online after delivery:', err);
-      });
+      await applyTerminalOrder(orderToComplete, confirmed);
 
       // Totals remain server-authoritative; never synthesize gains or delivery
       // counts locally from the completed order.
-      api.getEarnings(driverId).then((e) => {
-        setEarnings({
-          today: Number(e.today) || 0,
-          week: Number(e.thisWeek) || 0,
-          month: Number(e.thisMonth) || 0,
-        });
-        setStats((prev) => ({
-          ...prev,
-          deliveriesToday: e.completedToday,
-          deliveriesTotal: e.totalDeliveries,
-        }));
-      }).catch(() => {});
+      void refreshEarnings();
 
       return true;
     } catch (err) {
+      if (sessionEpoch !== driverSessionEpochRef.current) return false;
       console.warn('[DriverContext] delivery completion failed:', err);
       Alert.alert(
         'Livraison non confirmée',
-        'Impossible de confirmer la livraison. Vérifiez le code et votre connexion.',
+        getDeliveryConfirmationErrorMessage(err),
       );
       return false;
     } finally {
       isConfirmingDeliveryRef.current = false;
     }
-  }, [driverId, queueActiveSnapshotWrite]);
-
-  const refreshEarnings = useCallback(() => {
-    if (!driverId) return;
-    api.getEarnings(driverId).then((e) => {
-      setEarnings({
-        today: Number(e.today) || 0,
-        week: Number(e.thisWeek) || 0,
-        month: Number(e.thisMonth) || 0,
-      });
-    }).catch(() => {});
-  }, [driverId]);
+  }, [driverId, applyTerminalOrder, persistActiveOrderSnapshot, refreshEarnings]);
 
   return (
     <DriverContext.Provider value={{
@@ -1920,6 +2077,9 @@ export function DriverProvider({ children }: { children: React.ReactNode }) {
       lastSyncAt,
        pushNotificationStatus,
       refreshEarnings,
+      metricsRefreshing,
+      metricsSyncError,
+      metricsLastSyncAt,
       refreshProfile,
     }}>
       {children}

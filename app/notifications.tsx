@@ -134,7 +134,7 @@ const styles = StyleSheet.create({
   backButton: { width: 40 },
   title: { flex: 1, color: Colors.text, fontSize: 22, fontWeight: '700' },
   unreadBadge: { minWidth: 28, height: 28, borderRadius: 14, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
-  unreadText: { color: '#000', fontWeight: '700', fontSize: 13 },
+  unreadText: { color: Colors.card, fontWeight: '700', fontSize: 13 },
   badgePlaceholder: { width: 28, height: 28 },
   content: { padding: 20, paddingTop: 4, gap: 12 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
@@ -150,5 +150,5 @@ const styles = StyleSheet.create({
   emptyTitle: { color: Colors.text, fontSize: 17, fontWeight: '700', marginTop: 14 },
   emptyText: { color: Colors.textSecondary, textAlign: 'center', marginTop: 8, lineHeight: 20 },
   retryButton: { marginTop: 18, backgroundColor: Colors.primary, borderRadius: 10, paddingHorizontal: 20, paddingVertical: 10 },
-  retryText: { color: '#000', fontWeight: '700' },
+  retryText: { color: Colors.card, fontWeight: '700' },
 });

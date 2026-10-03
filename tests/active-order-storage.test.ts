@@ -55,4 +55,26 @@ describe('active order restart snapshot', () => {
 
     expect(storage.removeItem).toHaveBeenCalledWith(`${ACTIVE_ORDER_KEY_PREFIX}4`);
   });
+
+  it.each([
+    ['legacy demo identity', { id: 'demo', status: 'accepted' }],
+    ['mismatched identity', { id: '42', apiId: 43, status: 'accepted' }],
+    ['completed delivery', { id: '42', apiId: 42, status: 'completed' }],
+    ['cancelled delivery', { id: '42', apiId: 42, status: 'cancelled' }],
+    ['old incoming offer', { id: '42', apiId: 42, status: 'incoming' }],
+    ['unknown status', { id: '42', apiId: 42, status: 'demo_active' }],
+    ['non-object JSON', []],
+  ])('removes a %s snapshot without clearing authentication', async (_name, snapshot) => {
+    storage.getItem.mockResolvedValue(JSON.stringify(snapshot));
+    await expect(loadActiveOrderSnapshot(4)).resolves.toBeNull();
+    expect(storage.removeItem).toHaveBeenCalledTimes(1);
+    expect(storage.removeItem).toHaveBeenCalledWith(`${ACTIVE_ORDER_KEY_PREFIX}4`);
+  });
+
+  it('does not suppress a valid delivery because its amount is 25 euros', async () => {
+    const order = { id: '42', apiId: 42, status: 'accepted', totalAmount: 25 };
+    storage.getItem.mockResolvedValue(JSON.stringify(order));
+    await expect(loadActiveOrderSnapshot(4)).resolves.toEqual(order);
+    expect(storage.removeItem).not.toHaveBeenCalled();
+  });
 });

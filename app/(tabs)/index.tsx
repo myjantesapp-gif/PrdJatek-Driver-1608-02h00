@@ -6,6 +6,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Platform,
+  Image,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,6 +15,7 @@ import { Colors } from '@/constants/colors';
 import { useDriver } from '@/context/DriverContext';
 import { useAuth } from '@/context/AuthContext';
 import { EarningsCard } from '@/components/EarningsCard';
+import { MetricsSyncStatus } from '@/components/MetricsSyncStatus';
 import { StatusToggle } from '@/components/StatusToggle';
 import { OrderCard } from '@/components/OrderCard';
 
@@ -36,12 +38,20 @@ export default function HomeScreen() {
         contentContainerStyle={styles.content}
       >
         <View style={styles.headerRow}>
-          <View>
-            <Text style={styles.greeting}>Bonjour,</Text>
-            <Text style={styles.driverName}>{profile.name.split(' ')[0]}</Text>
+          <View style={styles.identity}>
+            <Image
+              source={require('../../assets/jatek-logo-transparent.png')}
+              style={styles.brandMark}
+              resizeMode="contain"
+              accessibilityLabel="Jatek"
+            />
+            <View style={styles.driverIdentity}>
+              <Text style={styles.greeting}>Bonjour,</Text>
+              <Text style={styles.driverName} numberOfLines={1}>{profile.name.split(' ')[0]}</Text>
+            </View>
           </View>
           <TouchableOpacity style={styles.supportBtn} onPress={() => router.push('/support')}>
-            <Ionicons name="headset" size={22} color={Colors.tertiary} />
+            <Ionicons name="headset" size={21} color={Colors.text} />
           </TouchableOpacity>
         </View>
 
@@ -53,19 +63,20 @@ export default function HomeScreen() {
 
         <View style={styles.sectionGap} />
 
-        <EarningsCard earnings={earnings} stats={stats} />
-
-        <View style={styles.sectionGap} />
-
         {activeOrder && (
           <>
             <View style={styles.sectionHeader}>
               <View style={styles.sectionTitleRow}>
                 <View style={styles.activePulse} />
-                <Text style={styles.sectionTitle}>Commande active</Text>
+                <Text style={styles.sectionTitle}>À faire maintenant</Text>
               </View>
-              <TouchableOpacity onPress={() => router.push(`/order/${activeOrder.id}`)}>
-                <Text style={styles.seeAll}>Voir détails</Text>
+              <TouchableOpacity
+                onPress={() => router.push(`/order/${activeOrder.id}`)}
+                style={styles.continueLink}
+                activeOpacity={0.75}
+              >
+                <Text style={styles.seeAll}>Reprendre</Text>
+                <Ionicons name="arrow-forward" size={14} color={Colors.primaryDark} />
               </TouchableOpacity>
             </View>
             <OrderCard
@@ -76,32 +87,37 @@ export default function HomeScreen() {
           </>
         )}
 
+        <EarningsCard earnings={earnings} stats={stats} />
+        <MetricsSyncStatus />
+
+        <View style={styles.sectionGap} />
+
         <View style={styles.quickActions}>
           <Text style={styles.sectionTitle}>Accès rapide</Text>
           <View style={styles.actionsGrid}>
             <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/support')} activeOpacity={0.8}>
-              <View style={[styles.actionIcon, { backgroundColor: 'rgba(0,200,215,0.12)' }]}>
-                <Ionicons name="headset" size={24} color={Colors.tertiary} />
+              <View style={[styles.actionIcon, { backgroundColor: '#E3F2EF' }]}>
+                <Ionicons name="headset" size={23} color={Colors.tertiary} />
               </View>
               <Text style={styles.actionLabel}>Support</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/map')} activeOpacity={0.8}>
-              <View style={[styles.actionIcon, { backgroundColor: 'rgba(0,230,118,0.12)' }]}>
-                <Ionicons name="navigate" size={24} color={Colors.success} />
+              <View style={[styles.actionIcon, { backgroundColor: '#E3F2EF' }]}>
+                <Ionicons name="navigate" size={23} color={Colors.tertiary} />
               </View>
               <Text style={styles.actionLabel}>Navigation</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/history')} activeOpacity={0.8}>
-              <View style={[styles.actionIcon, { backgroundColor: 'rgba(200,180,0,0.12)' }]}>
+              <View style={[styles.actionIcon, { backgroundColor: '#F8F0D9' }]}>
                 <Ionicons name="time" size={24} color={Colors.secondary} />
               </View>
               <Text style={styles.actionLabel}>Historique</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/profile')} activeOpacity={0.8}>
-              <View style={[styles.actionIcon, { backgroundColor: 'rgba(233,30,140,0.12)' }]}>
+              <View style={[styles.actionIcon, { backgroundColor: '#FCE4EF' }]}>
                 <Ionicons name="person" size={24} color={Colors.primary} />
               </View>
               <Text style={styles.actionLabel}>Profil</Text>
@@ -131,45 +147,65 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.background,
   },
   content: {
-    paddingHorizontal: 16,
-    paddingBottom: 24,
-    paddingTop: 16,
+    paddingHorizontal: 20,
+    paddingBottom: 28,
+    paddingTop: 12,
   },
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 20,
+    alignItems: 'center',
+    marginBottom: 22,
+  },
+  identity: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+    flex: 1,
+  },
+  brandMark: {
+    width: 48,
+    height: 48,
+  },
+  driverIdentity: {
+    flex: 1,
   },
   greeting: {
-    color: Colors.textMuted,
-    fontSize: 14,
+    color: Colors.textSecondary,
+    fontSize: 12,
     fontFamily: 'Poppins_400Regular',
   },
   driverName: {
     color: Colors.text,
-    fontSize: 28,
-    fontFamily: 'Poppins_800ExtraBold',
-    letterSpacing: -0.5,
+    fontSize: 23,
+    fontFamily: 'Poppins_700Bold',
+    letterSpacing: -0.3,
   },
   supportBtn: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: Colors.surface,
+    backgroundColor: Colors.tertiaryLight,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: Colors.tertiaryLight,
   },
   sectionGap: {
-    height: 20,
+    height: 22,
   },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
+  },
+  continueLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    minHeight: 40,
+    paddingLeft: 8,
   },
   sectionTitleRow: {
     flexDirection: 'row',
@@ -188,7 +224,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Poppins_700Bold',
   },
   seeAll: {
-    color: Colors.primary,
+    color: Colors.primaryDark,
     fontSize: 13,
     fontFamily: 'Poppins_600SemiBold',
   },
@@ -197,29 +233,30 @@ const styles = StyleSheet.create({
   },
   actionsGrid: {
     flexDirection: 'row',
-    gap: 12,
+    gap: 9,
     marginTop: 12,
   },
   actionCard: {
     flex: 1,
     backgroundColor: Colors.card,
     borderRadius: Colors.radius,
-    padding: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 5,
     alignItems: 'center',
     gap: 10,
     borderWidth: 1,
     borderColor: Colors.border,
   },
   actionIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
+    width: 44,
+    height: 44,
+    borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
   },
   actionLabel: {
-    color: Colors.textSecondary,
-    fontSize: 11,
+    color: Colors.text,
+    fontSize: 10,
     fontFamily: 'Poppins_600SemiBold',
     textAlign: 'center',
   },

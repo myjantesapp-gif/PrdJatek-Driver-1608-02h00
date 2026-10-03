@@ -179,7 +179,7 @@ export default function ChangePasswordScreen() {
             disabled={loading}
           >
             {loading ? (
-              <ActivityIndicator color="#000" />
+              <ActivityIndicator color={Colors.card} />
             ) : (
               <Text style={styles.submitText}>Modifier le mot de passe</Text>
             )}
@@ -202,7 +202,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border ?? '#1E1E2E',
+    borderBottomColor: Colors.border,
   },
   backBtn: {
     width: 40,
@@ -238,10 +238,10 @@ const styles = StyleSheet.create({
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.card ?? '#12121F',
+    backgroundColor: Colors.card,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: Colors.border ?? '#1E1E2E',
+    borderColor: Colors.border,
     paddingHorizontal: 16,
   },
   input: {
@@ -255,7 +255,7 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   hint: {
-    color: Colors.error ?? '#EF4444',
+    color: Colors.error,
     fontSize: 11,
     fontFamily: 'Poppins_400Regular',
     marginTop: 4,
@@ -272,7 +272,7 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   submitText: {
-    color: '#000',
+    color: Colors.card,
     fontSize: 15,
     fontFamily: 'Poppins_700Bold',
   },

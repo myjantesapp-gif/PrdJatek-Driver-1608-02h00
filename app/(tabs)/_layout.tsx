@@ -1,6 +1,7 @@
 import { Tabs } from 'expo-router';
 import { View, StyleSheet, Platform, ColorValue } from 'react-native';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '@/constants/colors';
 import { useDriver } from '@/context/DriverContext';
 import { LiveOrderAlert } from '@/components/LiveOrderAlert';
@@ -19,6 +20,8 @@ function ActiveOrderDot() {
 
 function TabsLayout() {
   const { incomingOrder, acceptOrder, declineOrder } = useDriver();
+  const insets = useSafeAreaInsets();
+  const tabBottomPadding = Platform.OS === 'web' ? 22 : Math.max(insets.bottom, 12);
 
   return (
     <View style={{ flex: 1 }}>
@@ -29,13 +32,20 @@ function TabsLayout() {
             backgroundColor: Colors.card,
             borderTopColor: Colors.border,
             borderTopWidth: 1,
-            height: Platform.OS === 'web' ? 84 : 82,
-            paddingBottom: Platform.OS === 'web' ? 34 : 20,
-            paddingTop: 10,
+            height: 54 + tabBottomPadding,
+            paddingBottom: tabBottomPadding,
+            paddingTop: 6,
+            borderTopLeftRadius: 22,
+            borderTopRightRadius: 22,
           },
           tabBarActiveTintColor: Colors.primary,
           tabBarInactiveTintColor: Colors.textMuted,
-          tabBarShowLabel: false,
+          tabBarShowLabel: true,
+          tabBarLabelStyle: {
+            fontFamily: 'Poppins_600SemiBold',
+            fontSize: 10,
+            marginTop: 1,
+          },
         }}
       >
         <Tabs.Screen
@@ -44,6 +54,7 @@ function TabsLayout() {
             tabBarIcon: ({ color, size }) => (
               <TabBarIcon name="home" color={color} size={size} />
             ),
+            tabBarLabel: 'Accueil',
           }}
         />
         <Tabs.Screen
@@ -55,6 +66,7 @@ function TabsLayout() {
                 <ActiveOrderDot />
               </View>
             ),
+            tabBarLabel: 'Commandes',
           }}
         />
         <Tabs.Screen
@@ -63,6 +75,7 @@ function TabsLayout() {
             tabBarIcon: ({ color, size }) => (
               <TabBarIcon name="navigate" color={color} size={size} />
             ),
+            tabBarLabel: 'Carte',
           }}
         />
         <Tabs.Screen
@@ -71,6 +84,7 @@ function TabsLayout() {
             tabBarIcon: ({ color, size }) => (
               <TabBarIcon name="time" color={color} size={size} />
             ),
+            tabBarLabel: 'Historique',
           }}
         />
         <Tabs.Screen
@@ -79,6 +93,7 @@ function TabsLayout() {
             tabBarIcon: ({ color, size }) => (
               <TabBarIcon name="person-circle" color={color} size={size} />
             ),
+            tabBarLabel: 'Profil',
           }}
         />
       </Tabs>
@@ -105,5 +120,7 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: Colors.primary,
+    borderWidth: 1.5,
+    borderColor: Colors.card,
   },
 });

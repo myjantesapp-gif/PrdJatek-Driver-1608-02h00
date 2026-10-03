@@ -311,7 +311,7 @@ export default function MapScreen() {
           region={mapRegion}
           showsUserLocation
           showsMyLocationButton={false}
-          customMapStyle={DARK_MAP_STYLE}
+          customMapStyle={LIGHT_MAP_STYLE}
         >
           {activeOrder && Marker && (
             <>
@@ -432,7 +432,7 @@ export default function MapScreen() {
                   activeOpacity={0.85}
                 >
                   <Text style={styles.detailBtnText}>Voir la commande</Text>
-                  <Ionicons name="chevron-forward" size={16} color="#000" />
+                  <Ionicons name="chevron-forward" size={16} color={Colors.card} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -452,13 +452,13 @@ export default function MapScreen() {
   );
 }
 
-const DARK_MAP_STYLE = [
-  { elementType: 'geometry', stylers: [{ color: '#0a0a0f' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#0a0a0f' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#746855' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#1c1c2e' }] },
-  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#2e2e48' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0a1628' }] },
+const LIGHT_MAP_STYLE = [
+  { elementType: 'geometry', stylers: [{ color: '#F5F1E8' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#FCF9F3' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#46696A' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#FFFFFF' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#E6DDD0' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#BFE4DF' }] },
 ];
 
 const styles = StyleSheet.create({
@@ -581,7 +581,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.warning,
   },
   retryButtonText: {
-    color: '#000',
+    color: Colors.card,
     fontSize: 11,
     fontFamily: 'Poppins_700Bold',
   },
@@ -651,7 +651,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   detailBtnText: {
-    color: '#000',
+    color: Colors.card,
     fontSize: 14,
     fontFamily: 'Poppins_700Bold',
   },

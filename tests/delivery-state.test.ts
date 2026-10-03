@@ -5,6 +5,10 @@ import {
   getNavigationUrls,
   getWebLocationFallback,
   isReadyForPickupStatus,
+  isAllowedStatusTransition,
+  mapAppStatusToApi,
+  canConfirmDelivery,
+  ACTIVE_STATUS_ORDER,
   mapApiStatus,
   shouldRetainActiveDelivery,
   shouldRollbackOptimisticStatus,
@@ -128,15 +132,16 @@ describe('order detail terminal controls', () => {
   );
 
   it('keeps the expected action labels for active states', () => {
-    expect(getNextOrderStatusLabel('accepted')).toBe('Confirmer la récupération');
+    expect(getNextOrderStatusLabel('accepted')).toBe('Je suis au restaurant');
     expect(getNextOrderStatusLabel('at_restaurant')).toBe('Commande récupérée');
     expect(getNextOrderStatusLabel('picked_up')).toBe('En route vers le client');
   });
 
   it('follows the documented driver status sequence', () => {
-    expect(getNextDeliveryStatus('accepted')).toBe('picked_up');
+    expect(getNextDeliveryStatus('accepted')).toBe('at_restaurant');
     expect(getNextDeliveryStatus('at_restaurant')).toBe('picked_up');
-    expect(getNextDeliveryStatus('picked_up')).toBe('delivering');
+    expect(getNextDeliveryStatus('picked_up')).toBe('en_route');
+    expect(getNextDeliveryStatus('en_route')).toBe('delivering');
     expect(getNextDeliveryStatus('delivering')).toBe(null);
   });
 
@@ -148,6 +153,30 @@ describe('order detail terminal controls', () => {
     expect(isReadyForPickupStatus('accepted')).toBe(false);
     expect(isReadyForPickupStatus('picked_up')).toBe(false);
     expect(isReadyForPickupStatus('delivered')).toBe(false);
+  });
+});
+
+describe('strict remote driver contract', () => {
+  it('maps each action to the exact backend milestone', () => {
+    expect(ACTIVE_STATUS_ORDER.map(mapAppStatusToApi)).toEqual([
+      'accepted', 'driver_at_restaurant', 'picked_up', 'en_route', 'out_for_delivery',
+    ]);
+    expect(mapApiStatus('en_route')).toBe('en_route');
+    expect(mapApiStatus('driver_at_restaurant')).toBe('at_restaurant');
+    expect(mapApiStatus('preparing')).toBe('accepted');
+    expect(getNextOrderStatusLabel('en_route')).toBe('Je suis arrivé chez le client');
+  });
+
+  it('allows only the next milestone, never skips or generic completion', () => {
+    const states = [...ACTIVE_STATUS_ORDER, 'incoming', 'completed', 'cancelled'] as const;
+    for (const from of states) {
+      for (const to of states) {
+        expect(isAllowedStatusTransition(from, to)).toBe(
+          getNextDeliveryStatus(from) !== null && getNextDeliveryStatus(from) === to,
+        );
+      }
+      expect(canConfirmDelivery(from)).toBe(from === 'delivering');
+    }
   });
 });
 

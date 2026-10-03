@@ -3,6 +3,7 @@ export type DeliveryStatus =
   | 'accepted'
   | 'at_restaurant'
   | 'picked_up'
+  | 'en_route'
   | 'delivering'
   | 'completed'
   | 'cancelled';
@@ -11,6 +12,7 @@ export const ACTIVE_STATUS_ORDER: DeliveryStatus[] = [
   'accepted',
   'at_restaurant',
   'picked_up',
+  'en_route',
   'delivering',
 ];
 
@@ -19,20 +21,24 @@ export function mapApiStatus(apiStatus: string): DeliveryStatus | null {
   const status = apiStatus?.trim().toLowerCase().replace(/[\s-]+/g, '_') ?? '';
   switch (status) {
     case 'pending':
-    case 'assigned':
     case 'ready':
     case 'ready_for_pickup':
       return 'incoming';
     case 'accepted':
+    case 'assigned':
+    case 'confirmed':
+    case 'preparing':
       return 'accepted';
     case 'at_restaurant':
-    case 'ready_for_pickup':
-    case 'preparing':
+    case 'driver_at_restaurant':
       return 'at_restaurant';
+    case 'preparing':
+      return 'accepted';
     case 'picked_up':
     case 'pickedup':
       return 'picked_up';
     case 'en_route':
+      return 'en_route';
     case 'delivering':
     case 'in_progress':
     case 'out_for_delivery':
@@ -54,21 +60,35 @@ export function isReadyForPickupStatus(apiStatus?: string): boolean {
   return normalized === 'ready' || normalized === 'ready_for_pickup';
 }
 
+/** Statuses the remote /orders/available contract can advertise to drivers. */
+export function isDriverOfferStatus(apiStatus?: string): boolean {
+  const normalized = apiStatus?.trim().toLowerCase().replace(/[\s-]+/g, '_') ?? '';
+  return ['accepted', 'confirmed', 'preparing'].includes(normalized) ||
+    isReadyForPickupStatus(apiStatus);
+}
+
 export function isAllowedStatusTransition(from: DeliveryStatus, to: DeliveryStatus) {
   switch (from) {
     case 'accepted':
-      // The documented driver flow may skip the informational
-      // "at_restaurant" state and confirm pickup directly.
-      return to === 'picked_up' || to === 'at_restaurant';
+      return to === 'at_restaurant';
     case 'at_restaurant':
       return to === 'picked_up';
     case 'picked_up':
+      return to === 'en_route';
+    case 'en_route':
       return to === 'delivering';
     default:
       return false;
   }
 }
 
+/** Keep the two remote travel stages distinct; delivering means out_for_delivery. */
+export function mapAppStatusToApi(status: DeliveryStatus): string {
+  if (status === 'at_restaurant') return 'driver_at_restaurant';
+  if (status === 'delivering') return 'out_for_delivery';
+  if (status === 'completed') return 'delivered';
+  return status;
+}
 /**
  * A poll can omit an accepted order while the server is delayed or return a
  * different order while the local delivery is still active. Only an explicit
@@ -123,10 +143,12 @@ export function shouldRollbackOptimisticStatus({
 export function getNextDeliveryStatus(status: DeliveryStatus): DeliveryStatus | null {
   switch (status) {
     case 'accepted':
-      return 'picked_up';
+      return 'at_restaurant';
     case 'at_restaurant':
       return 'picked_up';
     case 'picked_up':
+      return 'en_route';
+    case 'en_route':
       return 'delivering';
     default:
       return null;
@@ -136,11 +158,13 @@ export function getNextDeliveryStatus(status: DeliveryStatus): DeliveryStatus | 
 export function getNextOrderStatusLabel(status: DeliveryStatus): string | null {
   switch (status) {
     case 'accepted':
-      return 'Confirmer la récupération';
+      return 'Je suis au restaurant';
     case 'at_restaurant':
       return 'Commande récupérée';
     case 'picked_up':
       return 'En route vers le client';
+    case 'en_route':
+      return 'Je suis arrivé chez le client';
     default:
       return null;
   }
@@ -196,4 +220,8 @@ export type WebLocationFailure = 'unavailable' | 'permission-denied' | 'timeout'
  */
 export function getWebLocationFallback(_reason: WebLocationFailure) {
   return { ...DEFAULT_MAP_REGION };
+}
+
+export function canConfirmDelivery(status: DeliveryStatus): boolean {
+  return status === 'delivering';
 }

@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ACTIVE_STATUS_ORDER } from './delivery-state';
 
-export const BASE_URL = 'https://ma.jatek.app';
+export const BASE_URL = 'https://api.jatek.app';
 
 /** The only origin authorized to serve Jatek Driver business data. */
 export function getApiBaseUrl(): string {
@@ -57,6 +58,7 @@ export interface ApiDriverProfile {
   licenseNumber: string;
   photoUrl: string | null;
   isAvailable: boolean;
+  profileCompletedAt?: string | null;
   totalDeliveries: number;
   rating: number | null;
   latitude: number | null;
@@ -141,6 +143,7 @@ export interface ApiOrder {
   estimatedPickupTime?: number;
   estimatedDeliveryTime?: number;
   distance?: number;
+  distanceToPickupKm?: number | null;
   rating?: number;
 }
 
@@ -269,6 +272,7 @@ export interface ApiAvailableOrder {
   kitchenCode?: string | null;
   pickupCode?: string | null;
   driverId?: number | null;
+  distanceToPickupKm?: number | null;
   items?: Array<{
     id?: number;
     menuItemName?: string;
@@ -509,9 +513,25 @@ class JatekApi {
     latitude: number,
     longitude: number,
   ): Promise<ApiLocationResponse> {
+    const numericLatitude = Number(latitude);
+    const numericLongitude = Number(longitude);
+    if (
+      !Number.isFinite(numericLatitude) ||
+      numericLatitude < -90 ||
+      numericLatitude > 90 ||
+      !Number.isFinite(numericLongitude) ||
+      numericLongitude < -180 ||
+      numericLongitude > 180
+    ) {
+      throw new TypeError('Coordonnées GPS invalides.');
+    }
+
     return this.request<ApiLocationResponse>(`/api/drivers/${id}/location`, {
       method: 'PATCH',
-      body: JSON.stringify({ latitude, longitude }),
+      body: JSON.stringify({
+        latitude: numericLatitude,
+        longitude: numericLongitude,
+      }),
     });
   }
 
@@ -588,16 +608,19 @@ class JatekApi {
     })();
   }
 
-  async updateOrderStatus(orderId: number, status: string, extra?: Record<string, unknown>): Promise<ApiOrder> {
+  async updateOrderStatus(orderId: number, status: string): Promise<ApiOrder> {
     const response = await this.request<unknown>(`/api/orders/${orderId}/status`, {
       method: 'PATCH',
-      body: JSON.stringify({ status, ...extra }),
+      body: JSON.stringify({ status }),
     }, true, true);
     return unwrapOrderResponse(response, orderId) ?? this.getOrder(orderId);
   }
 
   /** Finalizes delivery with the customer's 4-digit pickup code. */
   async confirmDelivery(orderId: number, pickupCode: string): Promise<ApiOrder> {
+    if (!/^\d{4}$/.test(pickupCode)) {
+      throw new Error('Le code de livraison doit contenir 4 chiffres.');
+    }
     const response = await this.request<unknown>(`/api/orders/${orderId}/confirm-delivery`, {
       method: 'POST',
       body: JSON.stringify({ pickupCode }),
@@ -643,6 +666,27 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.status = status;
     this.data = data;
+  }
+}
+
+export function getDeliveryConfirmationErrorMessage(error: unknown): string {
+  if (!(error instanceof ApiError)) {
+    return 'Impossible de confirmer la livraison. Vérifiez votre connexion puis réessayez.';
+  }
+  const code = (error.data as { code?: string } | null)?.code;
+  switch (code) {
+    case 'INVALID_PICKUP_CODE_FORMAT':
+      return 'Le code doit contenir exactement 4 chiffres.';
+    case 'INVALID_PICKUP_CODE':
+      return 'Code incorrect. Vérifiez le code avec le client.';
+    case 'DELIVERY_CODE_EXPIRED':
+      return 'Le code de livraison a expiré. Demandez un nouveau code au client.';
+    case 'DELIVERY_CODE_ALREADY_USED':
+      return 'Ce code a déjà été utilisé. La livraison doit être resynchronisée avant de continuer.';
+    case 'DELIVERY_NOT_READY':
+      return 'Confirmez votre arrivée chez le client avant de saisir son code.';
+    default:
+      return error.message;
   }
 }
 
@@ -712,7 +756,22 @@ export async function loadActiveOrderSnapshot<T>(driverId: number): Promise<T | 
   const raw = await AsyncStorage.getItem(`${ACTIVE_ORDER_KEY_PREFIX}${driverId}`);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as T;
+    const snapshot: unknown = JSON.parse(raw);
+    const record = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
+      ? snapshot as Record<string, unknown>
+      : null;
+    if (
+      !record ||
+      typeof record.apiId !== 'number' ||
+      !Number.isInteger(record.apiId) ||
+      record.apiId <= 0 ||
+      record.id !== String(record.apiId) ||
+      !ACTIVE_STATUS_ORDER.some(status => status === record.status)
+    ) {
+      await clearActiveOrderSnapshot(driverId);
+      return null;
+    }
+    return snapshot as T;
   } catch {
     await clearActiveOrderSnapshot(driverId);
     return null;

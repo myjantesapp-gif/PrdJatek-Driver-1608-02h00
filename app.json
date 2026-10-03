@@ -3,15 +3,15 @@
     "name": "Jatek Driver",
     "slug": "jatekdriver",
     "owner": "jateksys",
-    "version": "1.0.0",
+    "version": "3.10.1811",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/driver-icon.png",
     "scheme": "jatekdriver",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "light",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0A0A0F"
+      "backgroundColor": "#F1B5D1"
     },
     "ios": {
       "supportsTablet": false,
@@ -19,8 +19,9 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundColor": "#0A0A0F"
+        "foregroundImage": "./assets/driver-icon-foreground.png",
+        "backgroundColor": "#F1B5D1",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "package": "com.jatek.driver",
       "permissions": [
@@ -28,7 +29,7 @@
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.POST_NOTIFICATIONS"
       ],
-      "versionCode": 25
+      "versionCode": 28
     },
     "web": {
       "bundler": "metro",
@@ -40,7 +41,8 @@
         "expo-notifications",
         {
           "defaultChannel": "orders",
-          "color": "#E91E8C"
+          "icon": "./assets/notification-icon.png",
+          "color": "#CF346E"
         }
       ],
       [
